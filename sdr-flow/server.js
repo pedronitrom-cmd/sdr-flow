@@ -123,6 +123,9 @@ async function getConfig() {
 
 async function init() {
   await client.executeMultiple(SCHEMA);
+  for (const c of ['empresa', 'cnpj', 'ramo', 'porte', 'alt_tel']) {
+    try { await client.execute(`ALTER TABLE leads ADD COLUMN ${c} TEXT`); } catch (e) { /* coluna já existe */ }
+  }
   const cfg = await all('SELECT chave FROM config');
   const have = new Set(cfg.map((c) => c.chave));
   const missing = Object.entries(DEFAULT_CONFIG).filter(([k]) => !have.has(k));
@@ -264,8 +267,8 @@ app.post('/api/leads/importar', auth(['gestor']), wrap(async (req, res) => {
     if (existentes.has(tel)) { out.duplicados++; continue; }
     existentes.add(tel);
     const owner = sdrs.length ? sdrs[rr++ % sdrs.length] : null;
-    stmts.push([`INSERT INTO leads (nome, telefone, cidade, consumo, email, obs, owner_id, lote, criado_em) VALUES (?,?,?,?,?,?,?,?,?)`,
-      [titleCase(l.nome) || 'Cliente', tel, l.cidade ? titleCase(l.cidade) : null, l.consumo ? String(l.consumo).trim() : null, l.email || null, l.obs || null, owner, loteNome, now()]]);
+    stmts.push([`INSERT INTO leads (nome, telefone, cidade, consumo, email, obs, owner_id, lote, criado_em, empresa, cnpj, ramo, porte, alt_tel) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [titleCase(l.nome) || 'Cliente', tel, l.cidade ? titleCase(l.cidade) : null, l.consumo ? String(l.consumo).trim() : null, l.email || null, l.obs || null, owner, loteNome, now(), l.empresa || null, l.cnpj || null, l.ramo || null, l.porte || null, l.alt_tel || null]]);
     out.importados++;
   }
   for (let i = 0; i < stmts.length; i += 400) await batch(stmts.slice(i, i + 400));
