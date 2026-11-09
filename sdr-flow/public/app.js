@@ -214,6 +214,7 @@ function renderTpl(text, lead) {
   return String(text || '')
     .replace(/\{nome\}/g, first(lead.nome))
     .replace(/\{nome_completo\}/g, lead.nome || '')
+    .replace(/\{empresa\}/g, lead.empresa || '')
     .replace(/\{cidade\}/g, lead.cidade || '')
     .replace(/\{consumo\}/g, lead.consumo || '')
     .replace(/\{sdr\}/g, first(S.user.nome))
@@ -287,9 +288,11 @@ function drawFila() {
   <div class="card" style="margin-top:14px">
     <div class="pills" style="margin-bottom:10px">${motivo}${statusChip(l.status)}${l.tentativas ? `<span class="chip">${l.tentativas} tentativa${l.tentativas > 1 ? 's' : ''}</span>` : ''}</div>
     <div class="lead-name">${esc(l.nome)}</div>
+    ${l.empresa ? `<div class="small" style="margin-top:2px"><b>${esc(l.empresa)}</b>${l.ramo ? ' · ' + esc(l.ramo) : ''}${l.porte ? ' · ' + esc(l.porte) : ''}</div>` : ''}
     <div class="row" style="margin-top:6px"><span class="lead-phone">${fmtPhone(l.telefone)}</span>
       <button class="btn ghost sm" data-act="copy" aria-label="Copiar número">${ic('copy', 18)}</button></div>
     <div class="muted small" style="margin-top:4px">${[l.cidade, l.consumo ? 'Consumo: ' + l.consumo : '', l.email].filter(Boolean).map(esc).join(' · ') || 'Sem mais dados'}</div>
+    ${l.alt_tel ? `<div class="muted small" style="margin-top:4px">Outros números: ${esc(l.alt_tel)}</div>` : ''}
     ${l.obs ? `<div class="alert" style="margin-top:10px">${esc(l.obs)}</div>` : ''}
     <div class="actions">
       <button class="act call" data-act="call">${ic('phone', 28)}Ligar<small>${fmtPhone(l.telefone)}</small></button>
@@ -389,7 +392,7 @@ VIEWS.hoje = async () => {
   const atras = h.followups.filter((l) => l.followup_em < ini);
   const hoje = h.followups.filter((l) => l.followup_em >= ini);
   const row = (l) => `<div class="list-item" data-act="open" data-id="${l.id}"><div class="ava">${esc(first(l.nome)[0] || '?')}</div>
-    <div class="grow"><b>${esc(l.nome)}</b><div class="muted small">${fmtPhone(l.telefone)}${l.cidade ? ' · ' + esc(l.cidade) : ''}</div></div>
+    <div class="grow"><b>${esc(l.nome)}</b>${l.empresa ? `<div class="small">${esc(l.empresa)}</div>` : ''}<div class="muted small">${fmtPhone(l.telefone)}${l.cidade ? ' · ' + esc(l.cidade) : ''}</div></div>
     <div style="text-align:right">${statusChip(l.status)}<div class="tiny muted" style="margin-top:4px">${when(l.followup_em)}</div></div></div>`;
   const sec = (t, arr) => arr.length ? `<div class="sec-title">${t} (${arr.length})</div><div class="card" style="padding:6px 14px">${arr.map(row).join('')}</div>` : '';
   $('#main').innerHTML = `<div class="top"><div><h1>Hoje</h1><div class="muted small">Seus retornos e follow-ups</div></div></div>
@@ -453,7 +456,7 @@ async function loadLeads(append) {
   if (f.q) p.set('q', f.q); if (f.status) p.set('status', f.status); if (f.owner) p.set('owner', f.owner);
   const r = await api('/leads?' + p);
   const rows = r.leads.map((l) => `<div class="list-item" data-act="open" data-id="${l.id}"><div class="ava">${esc(first(l.nome)[0] || '?')}</div>
-    <div class="grow"><b>${esc(l.nome)}</b><div class="muted small">${fmtPhone(l.telefone)}${l.cidade ? ' · ' + esc(l.cidade) : ''}${S.user.papel === 'gestor' ? ' · ' + esc(l.owner_nome || 'sem dono') : ''}</div></div>${statusChip(l.status)}</div>`).join('');
+    <div class="grow"><b>${esc(l.nome)}</b>${l.empresa ? `<div class="small">${esc(l.empresa)}</div>` : ''}<div class="muted small">${fmtPhone(l.telefone)}${l.cidade ? ' · ' + esc(l.cidade) : ''}${S.user.papel === 'gestor' ? ' · ' + esc(l.owner_nome || 'sem dono') : ''}</div></div>${statusChip(l.status)}</div>`).join('');
   const box = $('#ll'); if (!box) return;
   const more = f.offset + 40 < r.total ? '<button class="btn sec block" style="margin-top:10px" data-act="more">Carregar mais</button>' : '';
   const html = (append ? box.dataset.html || '' : '') + rows;
@@ -510,7 +513,7 @@ function drawImport() {
   const box = $('#imp'); if (!box) return;
   if (!S.imp) {
     box.innerHTML = `<div class="card"><h3>Importar contatos</h3><p class="muted small" style="margin:6px 0 12px">Envie um arquivo CSV (no Excel: Salvar como CSV) ou cole as linhas copiadas da planilha. Telefones duplicados são ignorados.</p>
-      <div class="drop"><input type="file" id="ifile" accept=".csv,.txt,text/csv,text/plain" class="hide"><button class="btn" data-act="pick">${ic('upload', 18)} Escolher arquivo CSV</button>
+      <div class="drop"><input type="file" id="ifile" accept=".csv,.txt,.xlsx,.xls,text/csv,text/plain" class="hide"><button class="btn" data-act="pick">${ic('upload', 18)} Escolher planilha (Excel ou CSV)</button>
       <div class="muted small" style="margin:12px 0 8px">ou cole aqui os dados (com cabeçalho)</div>
       <textarea id="ipaste" placeholder="nome;telefone;cidade&#10;Maria Souza;(34) 99999-1111;Uberlândia"></textarea>
       <button class="btn sec" style="margin-top:8px" data-act="readpaste">Ler dados colados</button></div></div>`;
@@ -523,9 +526,9 @@ function drawImport() {
   const sdrs = (S.users || []).filter((u) => u.papel === 'sdr' && u.ativo);
   const sel = im.sel || sdrs.map((u) => u.id);
   box.innerHTML = `<div class="card"><div class="row sp"><h3>Conferir importação</h3><button class="btn ghost sm" data-act="impcancel">Cancelar</button></div>
-    <div class="two" style="margin-top:6px">${FIELDS.map(([k, label]) => `<label class="field"><span>${label}</span><select data-imp="${k}">${colOpts(im.map[k])}</select></label>`).join('')}</div>
+    ${im.extra ? '<div class="alert ok" style="margin-top:8px">Base de empresas reconhecida: uma linha por empresa, com o melhor celular de sócio como número principal e os demais guardados como alternativos.</div>' : `<div class="two" style="margin-top:6px">${FIELDS.map(([k, label]) => `<label class="field"><span>${label}</span><select data-imp="${k}">${colOpts(im.map[k])}</select></label>`).join('')}</div>`}
     <div class="pills" style="margin:14px 0"><span class="chip">${num(im.rows.length)} linhas</span><span class="chip ok">${num(uniq.size)} telefones válidos</span>${ok.length - uniq.size ? `<span class="chip sun">${ok.length - uniq.size} repetidos no arquivo</span>` : ''}${im.rows.length - ok.length ? `<span class="chip bad">${im.rows.length - ok.length} sem telefone válido</span>` : ''}</div>
-    <div class="scroll-x"><table class="t"><thead><tr><th>Nome</th><th>Telefone</th><th>Cidade</th></tr></thead><tbody>${im.rows.slice(0, 5).map((r) => `<tr><td>${esc(r[im.map.nome] || '')}</td><td>${esc(normalizePhone(r[im.map.telefone]) ? fmtPhone(normalizePhone(r[im.map.telefone])) : (r[im.map.telefone] || '—'))}</td><td>${esc(r[im.map.cidade] || '')}</td></tr>`).join('')}</tbody></table></div>
+    <div class="scroll-x"><table class="t"><thead><tr><th>Nome</th>${im.extra ? '<th>Empresa</th>' : ''}<th>Telefone</th><th>Cidade</th></tr></thead><tbody>${im.rows.slice(0, 5).map((r, ri) => `<tr><td>${esc(r[im.map.nome] || '')}</td>${im.extra ? `<td>${esc(im.extra[ri].empresa)}</td>` : ''}<td>${esc(normalizePhone(r[im.map.telefone]) ? fmtPhone(normalizePhone(r[im.map.telefone])) : (r[im.map.telefone] || '—'))}</td><td>${esc(r[im.map.cidade] || '')}</td></tr>`).join('')}</tbody></table></div>
     <label class="field"><span>Nome do lote</span><input type="text" id="lote" placeholder="Ex.: Base clientes novembro"></label>
     <div class="field"><span style="display:block;font-size:13px;font-weight:600;color:var(--ink2);margin-bottom:6px">Distribuir entre</span>
       ${sdrs.length ? `<div class="checks">${sdrs.map((u) => `<label><input type="checkbox" data-sdr="${u.id}" ${sel.includes(u.id) ? 'checked' : ''}> ${esc(u.nome)}</label>`).join('')}</div>` : '<div class="alert">Cadastre as SDRs na aba Equipe para distribuir. Sem SDR, os contatos entram sem dono e você distribui depois.</div>'}</div>
@@ -533,28 +536,75 @@ function drawImport() {
   $$('[data-imp]', box).forEach((s) => s.addEventListener('change', () => { im.map[s.dataset.imp] = parseInt(s.value); drawImport(); }));
   $$('[data-sdr]', box).forEach((c) => c.addEventListener('change', () => { im.sel = $$('[data-sdr]', box).filter((x) => x.checked).map((x) => parseInt(x.dataset.sdr)); }));
 }
+function loadXlsxLib() {
+  if (window.XLSX) return Promise.resolve();
+  return new Promise((ok, no) => { const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js'; s.onload = ok; s.onerror = () => no(new Error('Não consegui carregar o leitor de Excel. Salve como CSV e tente de novo.')); document.head.appendChild(s); });
+}
 function readFile(e) {
   const file = e.target.files[0]; if (!file) return;
+  const isX = /\.xlsx?$/i.test(file.name);
   const rd = new FileReader();
-  rd.onload = () => {
-    const buf = rd.result; let text;
-    try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch (er) { text = new TextDecoder('windows-1252').decode(buf); }
+  rd.onload = async () => {
+    const buf = rd.result;
+    if (isX) {
+      try {
+        toast('Lendo planilha...');
+        await loadXlsxLib();
+        const wb = XLSX.read(buf, { type: 'array' });
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' }).filter((r) => r.some((c) => String(c).trim() !== ''));
+        return startRows(rows);
+      } catch (er) { return toast(er.message, true); }
+    }
+    let text; try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch (er) { text = new TextDecoder('windows-1252').decode(buf); }
     startImport(text);
   };
   rd.readAsArrayBuffer(file);
 }
-function startImport(text) {
-  const rows = parseTable(text.replace(/^﻿/, ''));
+/* base de empresas (CNPJ): uma linha por empresa, escolhe o melhor celular de sócio */
+function cnpjConvert(rows) {
+  const H = rows[0].map((h) => String(h || '').trim().toLowerCase());
+  const col = (n) => H.indexOf(n.toLowerCase());
+  const cols = (re) => H.map((h, i) => (re.test(h) ? i : -1)).filter((i) => i >= 0);
+  const g = (r, i) => (i >= 0 ? String(r[i] ?? '').trim() : '');
+  const iSit = col('situacaoempresadesc'), iDDD = col('ddd'), iTel = col('telefone');
+  const socios = [[cols(/^cel$/), col('nomesocio1')], [cols(/^cel2$/), col('nomesocio2')], [cols(/^telefone1socio3$/), col('nomesocio3')], [cols(/^telefone1socio4$/), col('nomesocio4')]];
+  const out = [], extra = []; let inativas = 0;
+  for (const r of rows.slice(1)) {
+    if (iSit >= 0 && g(r, iSit) && !/ativa/i.test(g(r, iSit))) { inativas++; continue; }
+    const cand = [], seen = new Set();
+    const add = (raw, nome) => { const t = normalizePhone(raw); if (t && !seen.has(t)) { seen.add(t); cand.push({ t, nome }); } };
+    socios.forEach(([cs, ni]) => cs.forEach((c) => add(g(r, c), g(r, ni))));
+    add(g(r, iDDD) + g(r, iTel), '');
+    const fant = g(r, col('nomefantasia')), razao = g(r, col('razaosocial'));
+    const empresa = (fant || razao).replace(/\s+\d{11}$/, '');
+    const mob = (t) => t.length === 13;
+    cand.sort((x, y) => (mob(y.t) - mob(x.t)) || (!!y.nome - !!x.nome));
+    const p = cand[0];
+    const nome = (p && p.nome) || g(r, col('nomesocio1')) || empresa;
+    out.push([nome, p ? p.t : '', g(r, col('cidade')), '', g(r, col('email1socio1')) || g(r, col('email')), '']);
+    extra.push({ empresa, cnpj: g(r, col('cnpj')), ramo: g(r, col('cnaeprincipaldesc')).slice(0, 90), porte: g(r, col('portempresadesc')) || g(r, col('porteempresadesc')), alt_tel: cand.slice(1, 4).map((c) => fmtPhone(c.t) + (c.nome ? ' (' + c.nome.split(' ')[0] + ')' : '')).join(' · ') });
+  }
+  return { rows: out, extra, inativas };
+}
+function startRows(rows) {
   if (rows.length < 1) return toast('Não encontrei dados no arquivo', true);
+  const low = rows[0].map((h) => String(h || '').trim().toLowerCase());
+  if (low.includes('cnpj') && low.includes('razaosocial')) {
+    const c = cnpjConvert(rows);
+    S.imp = { rows: c.rows, extra: c.extra, headers: ['Nome', 'Telefone', 'Cidade', 'Consumo', 'E-mail', 'Obs'], map: { nome: 0, telefone: 1, cidade: 2, consumo: -1, email: 4, obs: -1 }, sel: S.imp ? S.imp.sel : null };
+    toast('Base de empresas reconhecida' + (c.inativas ? ' · ' + c.inativas + ' inativas ignoradas' : ''));
+    return drawImport();
+  }
   setupImport(rows);
   if (S.imp.map.telefone < 0) { toast('Não achei a coluna de telefone. Escolha manualmente.', true); }
   drawImport();
 }
+function startImport(text) { startRows(parseTable(text.replace(/^\uFEFF/, ''))); }
 ACT.pick = () => $('#ifile').click();
 ACT.readpaste = () => { const t = $('#ipaste').value; if (!t.trim()) return toast('Cole os dados primeiro', true); startImport(t); };
 ACT.impcancel = () => { S.imp = null; drawImport(); };
 ACT.doimport = async (t) => {
-  const im = S.imp, leads = im.rows.map((r) => ({ nome: r[im.map.nome] || '', telefone: r[im.map.telefone] || '', cidade: r[im.map.cidade] || '', consumo: r[im.map.consumo] || '', email: r[im.map.email] || '', obs: r[im.map.obs] || '' }));
+  const im = S.imp, leads = im.rows.map((r, i) => ({ ...(im.extra ? im.extra[i] : {}), nome: r[im.map.nome] || '', telefone: r[im.map.telefone] || '', cidade: r[im.map.cidade] || '', consumo: r[im.map.consumo] || '', email: r[im.map.email] || '', obs: r[im.map.obs] || '' }));
   const sel = im.sel || (S.users || []).filter((u) => u.papel === 'sdr' && u.ativo).map((u) => u.id);
   t.disabled = true;
   try {
@@ -667,7 +717,7 @@ VIEWS.mensagens = async () => {
     <label class="field"><span>Versões do texto (separe com uma linha contendo ---)</span><textarea id="mv${m.id}" style="min-height:170px">${esc(m.variantes.join('\n---\n'))}</textarea></label>
     <div class="row" style="margin-top:12px"><button class="btn danger sm" data-act="delmsg" data-id="${m.id}">Excluir</button><button class="btn grow" data-act="savemsg" data-id="${m.id}">Salvar</button></div></div>`;
   $('#main').innerHTML = `<div class="top"><div><h1>Mensagens</h1><div class="muted small">Modelos do WhatsApp com várias versões</div></div></div>
-  <div class="alert">Variáveis: <b>{nome}</b> primeiro nome do cliente, <b>{nome_completo}</b>, <b>{cidade}</b>, <b>{consumo}</b>, <b>{sdr}</b> primeiro nome da SDR e <b>{link}</b> link do material (definido em Ajustes). Varie as versões: textos iguais enviados em massa aumentam o risco de bloqueio.</div>
+  <div class="alert">Variáveis: <b>{empresa}</b>, <b>{nome}</b> primeiro nome do cliente, <b>{nome_completo}</b>, <b>{cidade}</b>, <b>{consumo}</b>, <b>{sdr}</b> primeiro nome da SDR e <b>{link}</b> link do material (definido em Ajustes). Varie as versões: textos iguais enviados em massa aumentam o risco de bloqueio.</div>
   <div style="margin-top:14px">${S.msgs.map(card).join('')}</div>
   <div class="sec-title">Novo modelo</div>
   <div class="card"><label class="field" style="margin-top:0"><span>Título</span><input type="text" id="mt0" placeholder="Ex.: Retomada de contato"></label>
