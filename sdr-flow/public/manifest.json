@@ -1,0 +1,10 @@
+{
+  "name": "SDR Flow",
+  "short_name": "SDR Flow",
+  "description": "Fila de ligações, WhatsApp, follow-up e produtividade da equipe SDR",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F6F4EF",
+  "theme_color": "#14213D",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
