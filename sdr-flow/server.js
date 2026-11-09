@@ -126,6 +126,7 @@ async function init() {
   for (const c of ['empresa', 'cnpj', 'ramo', 'porte', 'alt_tel']) {
     try { await client.execute(`ALTER TABLE leads ADD COLUMN ${c} TEXT`); } catch (e) { /* coluna já existe */ }
   }
+  try { await client.execute('ALTER TABLE mensagens ADD COLUMN lote TEXT'); } catch (e) { /* coluna já existe */ }
   const cfg = await all('SELECT chave FROM config');
   const have = new Set(cfg.map((c) => c.chave));
   const missing = Object.entries(DEFAULT_CONFIG).filter(([k]) => !have.has(k));
@@ -289,12 +290,13 @@ app.post('/api/leads/distribuir', auth(['gestor']), wrap(async (req, res) => {
 }));
 
 app.get('/api/leads', auth(), wrap(async (req, res) => {
-  const { status, owner, q, limit = 50, offset = 0 } = req.query;
+  const { status, owner, q, lote, limit = 50, offset = 0 } = req.query;
   const cond = []; const args = [];
   if (req.user.papel === 'sdr') { cond.push('l.owner_id = ?'); args.push(req.user.id); }
   else if (owner === 'sem') cond.push('l.owner_id IS NULL');
   else if (owner) { cond.push('l.owner_id = ?'); args.push(Number(owner)); }
   if (status) { cond.push('l.status = ?'); args.push(status); }
+  if (lote) { cond.push('l.lote = ?'); args.push(lote); }
   if (q) { cond.push('(l.nome LIKE ? OR l.telefone LIKE ? OR l.cidade LIKE ?)'); const s = '%' + q + '%'; args.push(s, s, s); }
   const w = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
   const [tot, rows] = await Promise.all([
@@ -337,12 +339,14 @@ async function queueCounts(userId) {
 
 app.get('/api/fila/proxima', auth(), wrap(async (req, res) => {
   const pular = String(req.query.pular || '').split(',').map(Number).filter(Boolean);
-  const skipSql = pular.length ? `AND id NOT IN (${inList(pular.length)})` : '';
+  const lote = String(req.query.lote || '').trim();
+  const skipSql = (pular.length ? `AND id NOT IN (${inList(pular.length)})` : '') + (lote ? ' AND lote = ?' : '');
+  const lArg = lote ? [lote] : [];
   const t = now();
-  let lead = await get(`SELECT * FROM leads WHERE owner_id=? AND status NOT IN ('venda','perdido','invalido') AND followup_em IS NOT NULL AND followup_em <= ? ${skipSql} ORDER BY followup_em ASC LIMIT 1`, [req.user.id, t, ...pular]);
+  let lead = await get(`SELECT * FROM leads WHERE owner_id=? AND status NOT IN ('venda','perdido','invalido') AND followup_em IS NOT NULL AND followup_em <= ? ${skipSql} ORDER BY followup_em ASC LIMIT 1`, [req.user.id, t, ...pular, ...lArg]);
   let motivo = 'followup';
   if (!lead) {
-    lead = await get(`SELECT * FROM leads WHERE owner_id=? AND status='novo' AND followup_em IS NULL ${skipSql} ORDER BY id ASC LIMIT 1`, [req.user.id, ...pular]);
+    lead = await get(`SELECT * FROM leads WHERE owner_id=? AND status='novo' AND followup_em IS NULL ${skipSql} ORDER BY id ASC LIMIT 1`, [req.user.id, ...pular, ...lArg]);
     motivo = 'novo';
   }
   const counts = await queueCounts(req.user.id);
@@ -514,6 +518,16 @@ app.get('/api/stats/equipe', auth(['gestor']), wrap(async (req, res) => {
   });
 }));
 
+app.get('/api/lotes', auth(), wrap(async (req, res) => {
+  const sdr = req.user.papel === 'sdr';
+  const rows = await all(`SELECT lote, COUNT(*) total,
+      COALESCE(SUM(CASE WHEN status='novo' THEN 1 ELSE 0 END),0) novos,
+      COALESCE(SUM(CASE WHEN status='venda' THEN 1 ELSE 0 END),0) vendas,
+      COALESCE(SUM(CASE WHEN status NOT IN ('novo','invalido') THEN 1 ELSE 0 END),0) trabalhados
+    FROM leads WHERE lote IS NOT NULL ${sdr ? 'AND owner_id=?' : ''} GROUP BY lote ORDER BY MAX(id) DESC`, sdr ? [req.user.id] : []);
+  res.json(rows);
+}));
+
 app.get('/api/mensagens', auth(), wrap(async (req, res) => {
   res.json((await all('SELECT * FROM mensagens WHERE ativo=1 ORDER BY id')).map((m) => ({ ...m, variantes: JSON.parse(m.variantes) })));
 }));
@@ -521,12 +535,12 @@ const cleanVars = (v) => (v || []).map((x) => String(x).trim()).filter(Boolean);
 app.post('/api/mensagens', auth(['gestor']), wrap(async (req, res) => {
   const { titulo } = req.body || {}, v = cleanVars(req.body.variantes);
   if (!titulo || !v.length) return res.status(400).json({ erro: 'Informe o título e pelo menos uma versão do texto' });
-  res.json({ id: (await run('INSERT INTO mensagens (titulo, variantes) VALUES (?,?)', [titulo, JSON.stringify(v)])).id });
+  res.json({ id: (await run('INSERT INTO mensagens (titulo, variantes, lote) VALUES (?,?,?)', [titulo, JSON.stringify(v), String(req.body.lote || '').trim() || null])).id });
 }));
 app.put('/api/mensagens/:id', auth(['gestor']), wrap(async (req, res) => {
   const { titulo } = req.body || {}, v = cleanVars(req.body.variantes);
   if (!titulo || !v.length) return res.status(400).json({ erro: 'Informe o título e pelo menos uma versão do texto' });
-  await run('UPDATE mensagens SET titulo=?, variantes=? WHERE id=?', [titulo, JSON.stringify(v), Number(req.params.id)]);
+  await run('UPDATE mensagens SET titulo=?, variantes=?, lote=? WHERE id=?', [titulo, JSON.stringify(v), String(req.body.lote || '').trim() || null, Number(req.params.id)]);
   res.json({ ok: true });
 }));
 app.delete('/api/mensagens/:id', auth(['gestor']), wrap(async (req, res) => {
