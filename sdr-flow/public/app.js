@@ -26,7 +26,7 @@ const ic = (n, s = 20) => `<svg class="ic" width="${s}" height="${s}" viewBox="0
 
 let TOKEN = null;
 try { TOKEN = localStorage.getItem('sdrflow_token'); } catch (e) { /* sem storage */ }
-const S = { user: null, config: {}, view: '', skip: [], msgs: [], tplId: null, varIdx: 0, waWait: 0, stats: null, fila: null, counts: null, periodo: 'hoje', timer: null, imp: null, users: null, lf: { q: '', status: '', owner: '', offset: 0 } };
+const S = { lote: '', lotes: [], user: null, config: {}, view: '', skip: [], msgs: [], tplId: null, varIdx: 0, waWait: 0, stats: null, fila: null, counts: null, periodo: 'hoje', timer: null, imp: null, users: null, lf: { q: '', status: '', owner: '', lote: '', offset: 0 } };
 const VIEWS = {};
 const ACT = {};
 
@@ -221,9 +221,13 @@ function renderTpl(text, lead) {
     .replace(/\{link\}/g, S.config.pdf_link || '')
     .replace(/[ \t]+\n/g, '\n').trim();
 }
+function msgPool(lead) {
+  const esp = S.msgs.filter((m) => m.lote && lead && m.lote === lead.lote);
+  return esp.length ? esp : S.msgs.filter((m) => !m.lote);
+}
 function pickMsg(rotate) {
-  const f = S.fila;
-  const tpl = S.msgs.find((t) => String(t.id) === String(S.tplId)) || S.msgs[0];
+  const f = S.fila, pool = msgPool(f.lead);
+  const tpl = pool.find((t) => String(t.id) === String(S.tplId)) || pool[0];
   if (!tpl) { f.msgText = ''; return; }
   S.tplId = tpl.id;
   const n = tpl.variantes.length;
@@ -239,7 +243,8 @@ async function loadFila(forceId) {
   if (forceId) {
     const r = await api('/leads/' + forceId);
     nx = { lead: r.lead, historico: r.historico.slice(0, 8), motivo: 'manual' };
-  } else nx = await api('/fila/proxima?pular=' + S.skip.join(','));
+  } else nx = await api('/fila/proxima?pular=' + S.skip.join(',') + '&lote=' + encodeURIComponent(S.lote));
+  try { S.lotes = await api('/lotes'); } catch (e) { S.lotes = []; }
   S.stats = await stP;
   if (!nx.counts) nx.counts = (await api('/hoje')).counts;
   S.counts = nx.counts; setBadge(nx.counts.devidos);
@@ -267,6 +272,7 @@ function drawFila() {
   const m = $('#main');
   const head = `
     <div class="top"><div><h1>Fila de trabalho</h1><div class="muted small">${c.devidos || 0} retornos agora · ${c.novos || 0} contatos novos na fila</div></div></div>
+    ${S.lotes.length > 1 ? `<label class="field" style="margin:0 0 10px"><span>Campanha</span><select data-bind="lote"><option value="">Todas as campanhas</option>${S.lotes.map((x) => `<option value="${esc(x.lote)}" ${S.lote === x.lote ? 'selected' : ''}>${esc(x.lote)} (${x.novos} novos)</option>`).join('')}</select></label>` : ''}
     <div class="card" style="padding:14px 16px">
       ${progRow('Ligações hoje', st.hoje.ligacoes, st.metas.ligacoes, 'g')}
       ${progRow('WhatsApp hoje', st.hoje.whatsapp, st.metas.whatsapp, 'w')}
@@ -283,7 +289,7 @@ function drawFila() {
     : f.motivo === 'novo' ? '<span class="chip blue">Contato novo</span>' : '<span class="chip">Aberto manualmente</span>';
   const lim = parseInt(S.config.wa_limite_dia) || 80;
   const resList = f.canal === 'whatsapp' ? RES_WA : RES_LIG;
-  const tplOpts = S.msgs.map((t) => `<option value="${t.id}" ${String(t.id) === String(S.tplId) ? 'selected' : ''}>${esc(t.titulo)}</option>`).join('');
+  const pool = msgPool(l), tplOpts = pool.map((t) => `<option value="${t.id}" ${String(t.id) === String(S.tplId) ? 'selected' : ''}>${esc(t.titulo)}</option>`).join('');
   m.innerHTML = head + `
   <div class="card" style="margin-top:14px">
     <div class="pills" style="margin-bottom:10px">${motivo}${statusChip(l.status)}${l.tentativas ? `<span class="chip">${l.tentativas} tentativa${l.tentativas > 1 ? 's' : ''}</span>` : ''}</div>
@@ -300,7 +306,7 @@ function drawFila() {
     </div>
     <div class="msgbox">
       <div class="row sp"><b class="small">Mensagem do WhatsApp</b><button class="btn ghost sm" data-act="rotate">${ic('refresh', 16)} Outra versão</button></div>
-      ${S.msgs.length > 1 ? `<select data-bind="tpl" style="margin-top:8px">${tplOpts}</select>` : ''}
+      ${pool.length > 1 ? `<select data-bind="tpl" style="margin-top:8px">${tplOpts}</select>` : ''}
       <textarea data-bind="msgText" placeholder="Escreva a mensagem">${esc(f.msgText)}</textarea>
       ${!S.config.pdf_link && /\{link\}/.test(JSON.stringify(S.msgs)) ? '<div class="tiny muted" style="margin-top:6px">Dica: o gestor pode definir o link do material em Ajustes para ele entrar automático nos textos.</div>' : ''}
     </div>
@@ -380,6 +386,7 @@ ACT.save = async (t) => {
 
 document.addEventListener('input', (e) => {
   const k = e.target.dataset && e.target.dataset.bind; if (!k || !S.fila) return;
+  if (k === 'lote') { S.lote = e.target.value; S.skip = []; loadFila(); return; }
   if (k === 'tpl') { S.tplId = e.target.value; pickMsg(false); drawFila(); return; }
   S.fila[k] = e.target.value;
 });
@@ -442,9 +449,12 @@ VIEWS.contatos = async () => {
   <div class="card" style="margin-top:14px">
     <div class="row wrap" style="gap:8px"><input type="search" id="lq" placeholder="Buscar nome, telefone ou cidade" value="${esc(S.lf.q)}" style="flex:1;min-width:180px">
       <select id="ls" style="width:auto"><option value="">Todos os status</option>${Object.keys(STATUS).map((k) => `<option value="${k}" ${S.lf.status === k ? 'selected' : ''}>${STATUS[k][0]}</option>`).join('')}</select>
+      <select id="lt" style="width:auto"><option value="">Todas as campanhas</option></select>
       ${g ? '<select id="lo" style="width:auto"><option value="">Todas as SDRs</option><option value="sem">Sem dono</option></select>' : ''}</div>
     <div id="ll" style="margin-top:8px"></div></div>`;
   if (g) { drawImport(); drawDist(); const us = S.users || (S.users = await api('/usuarios')); $('#lo').innerHTML += us.filter((u) => u.papel === 'sdr' && u.ativo).map((u) => `<option value="${u.id}" ${String(S.lf.owner) === String(u.id) ? 'selected' : ''}>${esc(u.nome)}</option>`).join(''); if (S.lf.owner) $('#lo').value = S.lf.owner; }
+  api('/lotes').then((ls) => { const sel = $('#lt'); if (!sel) return; sel.innerHTML += ls.map((x) => `<option value="${esc(x.lote)}" ${S.lf.lote === x.lote ? 'selected' : ''}>${esc(x.lote)} (${x.total})</option>`).join(''); });
+  $('#lt').addEventListener('change', (e) => { S.lf.lote = e.target.value; S.lf.offset = 0; loadLeads(); });
   let t;
   $('#lq').addEventListener('input', (e) => { clearTimeout(t); t = setTimeout(() => { S.lf.q = e.target.value; S.lf.offset = 0; loadLeads(); }, 300); });
   $('#ls').addEventListener('change', (e) => { S.lf.status = e.target.value; S.lf.offset = 0; loadLeads(); });
@@ -453,7 +463,7 @@ VIEWS.contatos = async () => {
 };
 async function loadLeads(append) {
   const f = S.lf, p = new URLSearchParams({ limit: 40, offset: f.offset });
-  if (f.q) p.set('q', f.q); if (f.status) p.set('status', f.status); if (f.owner) p.set('owner', f.owner);
+  if (f.q) p.set('q', f.q); if (f.status) p.set('status', f.status); if (f.owner) p.set('owner', f.owner); if (f.lote) p.set('lote', f.lote);
   const r = await api('/leads?' + p);
   const rows = r.leads.map((l) => `<div class="list-item" data-act="open" data-id="${l.id}"><div class="ava">${esc(first(l.nome)[0] || '?')}</div>
     <div class="grow"><b>${esc(l.nome)}</b>${l.empresa ? `<div class="small">${esc(l.empresa)}</div>` : ''}<div class="muted small">${fmtPhone(l.telefone)}${l.cidade ? ' · ' + esc(l.cidade) : ''}${S.user.papel === 'gestor' ? ' · ' + esc(l.owner_nome || 'sem dono') : ''}</div></div>${statusChip(l.status)}</div>`).join('');
@@ -713,21 +723,24 @@ ACT.updateuser = async (t) => {
 /* ---------- mensagens ---------- */
 VIEWS.mensagens = async () => {
   S.msgs = await api('/mensagens');
-  const card = (m) => `<div class="card"><label class="field" style="margin-top:0"><span>Título</span><input type="text" id="mt${m.id}" value="${esc(m.titulo)}"></label>
+  const lotes = await api('/lotes').catch(() => []);
+  const dl = `<datalist id="lotesdl">${lotes.map((x) => `<option value="${esc(x.lote)}">`).join('')}</datalist>`;
+  const campo = (id, v) => `<label class="field"><span>Campanha (deixe vazio para valer para todas)</span><input type="text" list="lotesdl" id="ml${id}" value="${esc(v || '')}" placeholder="Nome do lote, ex.: Feirão Minha Casa Minha Vida"></label>`;
+  const card = (m) => `<div class="card"><label class="field" style="margin-top:0"><span>Título</span><input type="text" id="mt${m.id}" value="${esc(m.titulo)}"></label>${campo(m.id, m.lote)}
     <label class="field"><span>Versões do texto (separe com uma linha contendo ---)</span><textarea id="mv${m.id}" style="min-height:170px">${esc(m.variantes.join('\n---\n'))}</textarea></label>
     <div class="row" style="margin-top:12px"><button class="btn danger sm" data-act="delmsg" data-id="${m.id}">Excluir</button><button class="btn grow" data-act="savemsg" data-id="${m.id}">Salvar</button></div></div>`;
   $('#main').innerHTML = `<div class="top"><div><h1>Mensagens</h1><div class="muted small">Modelos do WhatsApp com várias versões</div></div></div>
   <div class="alert">Variáveis: <b>{empresa}</b>, <b>{nome}</b> primeiro nome do cliente, <b>{nome_completo}</b>, <b>{cidade}</b>, <b>{consumo}</b>, <b>{sdr}</b> primeiro nome da SDR e <b>{link}</b> link do material (definido em Ajustes). Varie as versões: textos iguais enviados em massa aumentam o risco de bloqueio.</div>
   <div style="margin-top:14px">${S.msgs.map(card).join('')}</div>
-  <div class="sec-title">Novo modelo</div>
-  <div class="card"><label class="field" style="margin-top:0"><span>Título</span><input type="text" id="mt0" placeholder="Ex.: Retomada de contato"></label>
+  ${dl}<div class="sec-title">Novo modelo</div>
+  <div class="card"><label class="field" style="margin-top:0"><span>Título</span><input type="text" id="mt0" placeholder="Ex.: Retomada de contato"></label>${campo(0, '')}
   <label class="field"><span>Versões do texto (separe com ---)</span><textarea id="mv0" style="min-height:130px" placeholder="Oi, {nome}! ...&#10;---&#10;Olá, {nome}, tudo bem? ..."></textarea></label>
   <button class="btn block" style="margin-top:12px" data-act="savemsg" data-id="0">Criar modelo</button></div>`;
 };
 ACT.savemsg = async (t) => {
   const id = t.dataset.id, variantes = $('#mv' + id).value.split(/\n\s*---+\s*\n/).map((x) => x.trim()).filter(Boolean);
   try {
-    await api(id === '0' ? '/mensagens' : '/mensagens/' + id, { method: id === '0' ? 'POST' : 'PUT', body: { titulo: $('#mt' + id).value, variantes } });
+    await api(id === '0' ? '/mensagens' : '/mensagens/' + id, { method: id === '0' ? 'POST' : 'PUT', body: { titulo: $('#mt' + id).value, lote: $('#ml' + id).value, variantes } });
     toast('Modelo salvo'); go('mensagens');
   } catch (e) { toast(e.message, true); }
 };
