@@ -26,7 +26,7 @@ const ic = (n, s = 20) => `<svg class="ic" width="${s}" height="${s}" viewBox="0
 
 let TOKEN = null;
 try { TOKEN = localStorage.getItem('sdrflow_token'); } catch (e) { /* sem storage */ }
-const S = { lote: '', lotes: [], user: null, config: {}, view: '', skip: [], msgs: [], tplId: null, varIdx: 0, waWait: 0, stats: null, fila: null, counts: null, periodo: 'hoje', timer: null, imp: null, users: null, lf: { q: '', status: '', owner: '', lote: '', offset: 0 } };
+const S = { sel: new Set(), del: null, lote: '', lotes: [], user: null, config: {}, view: '', skip: [], msgs: [], tplId: null, varIdx: 0, waWait: 0, stats: null, fila: null, counts: null, periodo: 'hoje', timer: null, imp: null, users: null, lf: { q: '', status: '', owner: '', lote: '', offset: 0 } };
 const VIEWS = {};
 const ACT = {};
 
@@ -454,14 +454,14 @@ VIEWS.numeros = async () => {
 VIEWS.contatos = async () => {
   const g = S.user.papel === 'gestor';
   $('#main').innerHTML = `<div class="top"><div><h1>Contatos</h1><div class="muted small">${g ? 'Importe a base, distribua e acompanhe' : 'Seus contatos e histórico'}</div></div></div>
-  ${g ? '<div id="imp"></div><div id="dist"></div>' : ''}
+  ${g ? '<div id="imp"></div><div id="dist"></div><div id="lotesbox"></div>' : ''}
   <div class="card" style="margin-top:14px">
     <div class="row wrap" style="gap:8px"><input type="search" id="lq" placeholder="Buscar nome, telefone ou cidade" value="${esc(S.lf.q)}" style="flex:1;min-width:180px">
       <select id="ls" style="width:auto"><option value="">Todos os status</option>${Object.keys(STATUS).map((k) => `<option value="${k}" ${S.lf.status === k ? 'selected' : ''}>${STATUS[k][0]}</option>`).join('')}</select>
       <select id="lt" style="width:auto"><option value="">Todas as campanhas</option></select>
       ${g ? '<select id="lo" style="width:auto"><option value="">Todas as SDRs</option><option value="sem">Sem dono</option></select>' : ''}</div>
     <div id="ll" style="margin-top:8px"></div></div>`;
-  if (g) { drawImport(); drawDist(); const us = S.users || (S.users = await api('/usuarios')); $('#lo').innerHTML += us.filter((u) => u.papel === 'sdr' && u.ativo).map((u) => `<option value="${u.id}" ${String(S.lf.owner) === String(u.id) ? 'selected' : ''}>${esc(u.nome)}</option>`).join(''); if (S.lf.owner) $('#lo').value = S.lf.owner; }
+  if (g) { drawImport(); drawDist(); drawLotes(); const us = S.users || (S.users = await api('/usuarios')); $('#lo').innerHTML += us.filter((u) => u.papel === 'sdr' && u.ativo).map((u) => `<option value="${u.id}" ${String(S.lf.owner) === String(u.id) ? 'selected' : ''}>${esc(u.nome)}</option>`).join(''); if (S.lf.owner) $('#lo').value = S.lf.owner; }
   api('/lotes').then((ls) => { const sel = $('#lt'); if (!sel) return; sel.innerHTML += ls.map((x) => `<option value="${esc(x.lote)}" ${S.lf.lote === x.lote ? 'selected' : ''}>${esc(x.lote)} (${x.total})</option>`).join(''); });
   $('#lt').addEventListener('change', (e) => { S.lf.lote = e.target.value; S.lf.offset = 0; loadLeads(); });
   let t;
@@ -474,13 +474,21 @@ async function loadLeads(append) {
   const f = S.lf, p = new URLSearchParams({ limit: 40, offset: f.offset });
   if (f.q) p.set('q', f.q); if (f.status) p.set('status', f.status); if (f.owner) p.set('owner', f.owner); if (f.lote) p.set('lote', f.lote);
   const r = await api('/leads?' + p);
-  const rows = r.leads.map((l) => `<div class="list-item" data-act="open" data-id="${l.id}"><div class="ava">${esc(first(l.nome)[0] || '?')}</div>
-    <div class="grow"><b>${esc(l.nome)}</b>${l.empresa ? `<div class="small">${esc(l.empresa)}</div>` : ''}<div class="muted small">${fmtPhone(l.telefone)}${l.cidade ? ' · ' + esc(l.cidade) : ''}${S.user.papel === 'gestor' ? ' · ' + esc(l.owner_nome || 'sem dono') : ''}</div></div>${statusChip(l.status)}</div>`).join('');
+  const g = S.user.papel === 'gestor';
+  const rows = r.leads.map((l) => {
+    const inner = `<div class="ava">${esc(first(l.nome)[0] || '?')}</div>
+    <div class="grow"><b>${esc(l.nome)}</b>${l.empresa ? `<div class="small">${esc(l.empresa)}</div>` : ''}<div class="muted small">${fmtPhone(l.telefone)}${l.cidade ? ' · ' + esc(l.cidade) : ''}${g ? ' · ' + esc(l.owner_nome || 'sem dono') : ''}</div></div>${statusChip(l.status)}`;
+    return g ? `<div class="list-item" style="cursor:default"><label class="selwrap"><input type="checkbox" class="selbox" data-id="${l.id}"></label><div class="open-area" data-act="open" data-id="${l.id}">${inner}</div></div>`
+      : `<div class="list-item" data-act="open" data-id="${l.id}">${inner}</div>`;
+  }).join('');
   const box = $('#ll'); if (!box) return;
   const more = f.offset + 40 < r.total ? '<button class="btn sec block" style="margin-top:10px" data-act="more">Carregar mais</button>' : '';
   const html = (append ? box.dataset.html || '' : '') + rows;
   box.dataset.html = html;
-  box.innerHTML = `<div class="muted tiny" style="margin:4px 0">${num(r.total)} contato${r.total === 1 ? '' : 's'}</div>${html || '<p class="muted">Nenhum contato encontrado.</p>'}${more}`;
+  const tools = g && html ? `<div class="row wrap seltools"><button class="btn sec sm" data-act="selall">Selecionar visíveis</button><button class="btn sec sm hide" id="btnselclr" data-act="selclr">Limpar seleção</button><button class="btn danger sm" id="btnseldel" data-act="delsel" disabled>Excluir selecionados</button><button class="btn danger sm" data-act="delfiltro">Excluir todos do filtro</button></div>` : '';
+  box.innerHTML = `<div class="muted tiny" style="margin:4px 0">${num(r.total)} contato${r.total === 1 ? '' : 's'}</div>${tools}${html || '<p class="muted">Nenhum contato encontrado.</p>'}${more}`;
+  box.querySelectorAll('.selbox').forEach((c) => { c.checked = S.sel.has(Number(c.dataset.id)); });
+  updSel();
 }
 ACT.more = () => { S.lf.offset += 40; loadLeads(true); };
 
@@ -492,11 +500,106 @@ async function leadModal(id) {
     <label class="field"><span>Responsável</span><select id="own"><option value="">Sem dono</option>${us.filter((u) => u.papel === 'sdr' && u.ativo).map((u) => `<option value="${u.id}" ${l.owner_id === u.id ? 'selected' : ''}>${esc(u.nome)}</option>`).join('')}</select></label>
     <div class="sec-title">Histórico</div>
     ${r.historico.length ? `<div class="hist">${r.historico.map((h) => `<div class="h"><b>${h.canal === 'ligacao' ? 'Ligação' : h.canal === 'whatsapp' ? 'WhatsApp' : 'Nota'}</b> · ${RES_LABEL[h.resultado] || h.resultado}<div class="muted tiny">${esc(h.user_nome)} · ${new Date(h.criado_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}${h.nota ? ' · ' + esc(h.nota) : ''}</div></div>`).join('')}</div>` : '<p class="muted small">Nenhuma interação ainda.</p>'}
-    <div class="row" style="margin-top:18px"><button class="btn sec grow" data-act="close">Fechar</button><button class="btn grow" data-act="assign" data-id="${l.id}">Salvar responsável</button></div>`);
+    ${S.user.papel === 'gestor' ? `<button class="btn danger sm block" style="margin-top:14px" data-act="dellead" data-id="${l.id}" data-nome="${esc(l.nome)}" data-tel="${esc(fmtPhone(l.telefone))}">Excluir este contato</button>` : ''}
+    <div class="row" style="margin-top:12px"><button class="btn sec grow" data-act="close">Fechar</button><button class="btn grow" data-act="assign" data-id="${l.id}">Salvar responsável</button></div>`);
 }
 ACT.assign = async (t) => {
   try { await api(`/leads/${t.dataset.id}/atribuir`, { method: 'PUT', body: { owner_id: $('#own').value || null } }); closeModal(); toast('Responsável atualizado'); S.lf.offset = 0; loadLeads(); } catch (e) { toast(e.message, true); }
 };
+
+/* ---------- exclusão (gestor) ---------- */
+async function drawLotes() {
+  const box = $('#lotesbox'); if (!box) return;
+  let ls = []; try { ls = await api('/lotes'); } catch (e) { return; }
+  if (!ls.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `<details class="card lotes"><summary><b>Listas importadas</b> <span class="muted small">(${ls.length}) · excluir listas</span></summary>
+    <p class="muted small" style="margin:8px 0 4px">“Não trabalhados” são os contatos novos, sem nenhuma ligação ou mensagem registrada.</p>
+    ${ls.map((x) => `<div class="lote-row"><div class="grow"><b>${esc(x.lote)}</b><div class="muted tiny">${num(x.total)} contatos · ${num(x.limpos)} não trabalhados · ${num(x.total - x.limpos)} trabalhados · ${num(x.vendas)} venda${x.vendas === 1 ? '' : 's'}</div></div>
+      <button class="btn sec sm" data-act="dellote" data-modo="limpos" data-lote="${esc(x.lote)}" ${x.limpos ? '' : 'disabled'}>Só não trabalhados</button>
+      <button class="btn danger sm" data-act="dellote" data-modo="tudo" data-lote="${esc(x.lote)}">Tudo</button></div>`).join('')}</details>`;
+}
+function updSel() {
+  const n = S.sel.size, b = $('#btnseldel'), c = $('#btnselclr');
+  if (b) { b.disabled = !n; b.textContent = n ? `Excluir selecionados (${num(n)})` : 'Excluir selecionados'; }
+  if (c) c.classList.toggle('hide', !n);
+}
+ACT.selall = () => { document.querySelectorAll('.selbox').forEach((c) => { c.checked = true; S.sel.add(Number(c.dataset.id)); }); updSel(); };
+ACT.selclr = () => { S.sel.clear(); document.querySelectorAll('.selbox').forEach((c) => { c.checked = false; }); updSel(); };
+
+async function abrirExclusao(cfg) {
+  S.del = { ...cfg, tr: !!cfg.tr, sim: null };
+  await simularExclusao();
+}
+async function simularExclusao() {
+  const d = S.del, r = d.mk(d.tr);
+  try { d.sim = await api(r.path, { method: 'POST', body: { ...r.body, simular: true } }); } catch (e) { toast(e.message, true); return; }
+  drawExclusao();
+}
+const exigeTexto = (d) => d.sim.alvo >= 100 || (d.tr && d.sim.trabalhados > 0 && d.sim.alvo > 1);
+function drawExclusao() {
+  const d = S.del, s = d.sim, pl = (n, a, b) => `${num(n)} ${n === 1 ? a : b}`;
+  const aviso = s.alvo
+    ? `<div class="card flat" style="margin-top:12px;border-color:var(--bad)"><b>Serão excluídos ${pl(s.alvo, 'contato', 'contatos')}</b>${d.tr && s.interacoes ? ` e ${pl(s.interacoes, 'registro de ligação/mensagem/nota', 'registros de ligação/mensagem/nota')}` : ''}.
+        <div class="small" style="margin-top:6px">Não dá para desfazer. Os telefones excluídos poderão ser importados de novo.${d.tr && s.interacoes ? ' Os números do Painel que vieram desses registros deixam de contar.' : ''}</div></div>`
+    : `<div class="card flat" style="margin-top:12px">Nada para excluir com estas opções.</div>`;
+  modal(`<h2>${esc(d.titulo)}</h2>${d.desc ? `<div class="muted small" style="margin-top:4px">${esc(d.desc)}</div>` : ''}
+    <div class="small" style="margin-top:10px">Encontrados: <b>${num(s.total)}</b> · não trabalhados: <b>${num(s.limpos)}</b> · já trabalhados: <b>${num(s.trabalhados)}</b>${s.vendas ? ` (<b>${num(s.vendas)}</b> venda${s.vendas === 1 ? '' : 's'})` : ''}</div>
+    ${d.fixo ? '' : `<label class="chk"><input type="checkbox" id="dxtr" ${d.tr ? 'checked' : ''}> <span>Incluir também os já trabalhados <span class="muted">(apaga o histórico de ligações e mensagens deles)</span></span></label>`}
+    ${aviso}
+    ${d.tr && s.vendas ? `<label class="chk"><input type="checkbox" id="dxv"> <span>Sei que isso apaga ${pl(s.vendas, 'venda registrada', 'vendas registradas')}</span></label>` : ''}
+    ${s.alvo && exigeTexto(d) ? `<label class="field"><span>Para confirmar, digite EXCLUIR</span><input type="text" id="dxt" autocomplete="off" autocapitalize="characters" placeholder="EXCLUIR"></label>` : ''}
+    <div class="row" style="margin-top:16px"><button class="btn sec grow" data-act="close">Cancelar</button><button class="btn danger grow" id="dxgo" data-act="dodel" disabled>Excluir</button></div>`);
+  validarExclusao();
+}
+function validarExclusao() {
+  const d = S.del, b = $('#dxgo'); if (!d || !b) return;
+  const t = $('#dxt'), v = $('#dxv');
+  b.disabled = !d.sim.alvo || (t && t.value.trim().toUpperCase() !== 'EXCLUIR') || (v && !v.checked);
+}
+ACT.dodel = async (t) => {
+  const d = S.del; if (!d) return;
+  t.disabled = true;
+  const r = d.mk(d.tr);
+  try {
+    const out = await api(r.path, { method: 'POST', body: { ...r.body, confirmar_vendas: !!$('#dxv') && $('#dxv').checked } });
+    closeModal();
+    toast(`${num(out.excluidos)} contato${out.excluidos === 1 ? '' : 's'} excluído${out.excluidos === 1 ? '' : 's'}`);
+    S.sel.clear(); S.del = null;
+    try { const ls = await api('/lotes'); if (S.lf.lote && !ls.some((x) => x.lote === S.lf.lote)) S.lf.lote = ''; if (S.lote && !ls.some((x) => x.lote === S.lote)) S.lote = ''; } catch (e) { /* ok */ }
+    S.lf.offset = 0; S.stats = null;
+    if (S.view === 'contatos') VIEWS.contatos(); else go('contatos');
+  } catch (e) { toast(e.message, true); t.disabled = false; }
+};
+ACT.dellote = (t) => {
+  const lote = t.dataset.lote;
+  abrirExclusao({ titulo: 'Excluir lista', desc: lote, tr: t.dataset.modo === 'tudo', mk: (tr) => ({ path: '/lotes/excluir', body: { lote, modo: tr ? 'tudo' : 'limpos' } }) });
+};
+ACT.dellead = (t) => {
+  const id = Number(t.dataset.id);
+  abrirExclusao({ titulo: 'Excluir contato', desc: `${t.dataset.nome} · ${t.dataset.tel}`, tr: true, fixo: true, mk: () => ({ path: '/leads/excluir', body: { ids: [id], incluir_trabalhados: true } }) });
+};
+ACT.delsel = () => {
+  const ids = [...S.sel]; if (!ids.length) return;
+  abrirExclusao({ titulo: 'Excluir contatos selecionados', desc: `${num(ids.length)} selecionado${ids.length === 1 ? '' : 's'}`, tr: false, mk: (tr) => ({ path: '/leads/excluir', body: { ids, incluir_trabalhados: tr } }) });
+};
+ACT.delfiltro = () => {
+  const f = S.lf, filtro = {};
+  if (f.q) filtro.q = f.q; if (f.status) filtro.status = f.status; if (f.owner) filtro.owner = f.owner; if (f.lote) filtro.lote = f.lote;
+  if (!Object.keys(filtro).length) { toast('Aplique um filtro (campanha, status, SDR ou busca) para excluir em massa', true); return; }
+  const partes = [];
+  if (f.lote) partes.push('lista: ' + f.lote);
+  if (f.status) partes.push('status: ' + ((STATUS[f.status] || [f.status])[0]));
+  if (f.owner) partes.push(f.owner === 'sem' ? 'sem dono' : 'SDR: ' + (((S.users || []).find((u) => String(u.id) === String(f.owner)) || {}).nome || f.owner));
+  if (f.q) partes.push('busca: “' + f.q + '”');
+  abrirExclusao({ titulo: 'Excluir todos os contatos do filtro', desc: partes.join(' · '), tr: false, mk: (tr) => ({ path: '/leads/excluir', body: { filtro, incluir_trabalhados: tr } }) });
+};
+document.addEventListener('change', (e) => {
+  const t = e.target; if (!t || !t.classList) return;
+  if (t.classList.contains('selbox')) { const id = Number(t.dataset.id); if (t.checked) S.sel.add(id); else S.sel.delete(id); updSel(); }
+  else if (t.id === 'dxtr' && S.del) { S.del.tr = t.checked; simularExclusao(); }
+  else if (t.id === 'dxv') validarExclusao();
+});
+document.addEventListener('input', (e) => { if (e.target && e.target.id === 'dxt') validarExclusao(); });
 
 /* ---------- importação (gestor) ---------- */
 function parseTable(text) {
