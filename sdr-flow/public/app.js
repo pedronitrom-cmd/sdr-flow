@@ -142,7 +142,7 @@ function viewLogin() {
 /* ---------- shell ---------- */
 const NAV = {
   sdr: [['fila', 'Fila', 'phone'], ['hoje', 'Hoje', 'calendar'], ['numeros', 'Números', 'chart'], ['contatos', 'Contatos', 'user']],
-  gestor: [['painel', 'Painel', 'chart'], ['relatorio', 'Relatório', 'calendar'], ['contatos', 'Contatos', 'upload'], ['equipe', 'Equipe', 'users'], ['mensagens', 'Mensagens', 'msg'], ['config', 'Ajustes', 'sliders']]
+  gestor: [['painel', 'Painel', 'chart'], ['relatorio', 'Relatório', 'calendar'], ['envio', 'Enviar', 'chat'], ['contatos', 'Contatos', 'upload'], ['equipe', 'Equipe', 'users'], ['mensagens', 'Mensagens', 'msg'], ['config', 'Ajustes', 'sliders']]
 };
 function renderShell() {
   const nav = NAV[S.user.papel];
@@ -848,13 +848,11 @@ function buildMsg(d, o, sdrs) {
     }
   }
   if (o.tabsdr && sdrs.length) {
-    const cols = MOTIVOS.filter((m) => all.some((a) => a.resultado === m[0]));
-    if (cols.length) {
-      const w = Math.max(4, ...sdrs.map((s) => Math.min(10, s.nome.length)));
-      L.push('*Tabulação por SDR*', '```', `${pad('SDR', w)} ${cols.map((m) => lp(m[2], 7)).join(' ')}  Total`);
-      sdrs.forEach((s) => { const t = trab(s); L.push(`${pad(s.nome.slice(0, 10), w)} ${cols.map((m) => lp(t.filter((a) => a.resultado === m[0]).length, 7)).join(' ')}  ${lp(t.length, 5)}`); });
-      L.push('```', '');
-    }
+    const w = Math.max(4, ...sdrs.map((x) => Math.min(10, x.nome.length)));
+    const C = [['Lig', (t) => t.filter((a) => a.canal === 'ligacao').length], ['Atend', (t) => t.filter((a) => a.canal === 'ligacao' && !['nao_atendeu', 'caixa_postal', 'invalido'].includes(a.resultado)).length], ['WA', (t) => t.filter((a) => a.canal === 'whatsapp' && a.resultado === 'enviado').length], ['Int', (t) => t.filter((a) => a.resultado === 'interessado').length], ['Prop', (t) => t.filter((a) => a.resultado === 'proposta').length], ['Venda', (t) => t.filter((a) => a.resultado === 'venda').length]];
+    L.push('*Por SDR*', '```', `${pad('SDR', w)} ${C.map((c) => lp(c[0], 5)).join(' ')}`);
+    sdrs.forEach((x) => { const t = trab(x); L.push(`${pad(x.nome.slice(0, 10), w)} ${C.map((c) => lp(c[1](t), 5)).join(' ')}`); });
+    L.push('```', '');
   }
   const fl = (a) => `${a.nome}${a.empresa ? ' (' + a.empresa + ')' : ''}${a.cidade ? ' – ' + a.cidade : ''}${o.tel ? ' – ' + fmtPhone(a.telefone) : ''}`;
   const lista = (titulo, arr) => { if (!arr.length) return; L.push(`*${titulo} (${arr.length})*`); arr.forEach((a) => L.push(`• ${fl(a)} – ${a.sdr}${a.valor ? ' – ' + money(a.valor) : ''}${a.nota ? '\n   “' + a.nota + '”' : ''}`)); L.push(''); };
@@ -890,13 +888,11 @@ const matchMotivo = (a, m) => !m || (m === 'nota' ? !!a.nota : m === 'ligacao' |
 async function drawRel(fetchNew) {
   const box = $('#rbody'); if (!box) return;
   if (fetchNew) { box.innerHTML = '<p class="muted">Carregando…</p>'; try { S.rel.d = await api('/relatorio?data=' + S.rel.data); } catch (e) { box.innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; return; } const sel = $('#ruser'); if (sel) { sel.innerHTML = '<option value="">Todas as SDRs</option>' + S.rel.d.sdrs.map((s) => `<option value="${s.id}" ${String(S.rel.user) === String(s.id) ? 'selected' : ''}>${esc(s.nome)}</option>`).join(''); } }
-  const d = S.rel.d, t = d.totais, mo = S.rel.motivo, o = relOpts();
+  const d = S.rel.d, t = d.totais, mo = S.rel.motivo;
   const list = d.sdrs.filter((s) => !S.rel.user || String(s.id) === String(S.rel.user));
   const cnt = (m) => list.reduce((a, s) => a + s.atividades.filter((x) => matchMotivo(x, m)).length, 0);
   const chips = [['', 'Todos'], ...MOTIVOS.filter((m) => cnt(m[0])).map((m) => [m[0], m[1]]), ['nota', 'Com anotação']];
   const fchips = `<div class="chips">${chips.map((c) => `<button class="fchip ${mo === c[0] ? 'on' : ''}" data-act="relmotivo" data-v="${c[0]}">${esc(c[1])} <b>${cnt(c[0])}</b></button>`).join('')}</div>`;
-  const ck = (k, l) => `<label class="chk"><input type="checkbox" data-opt="${k}" ${o[k] ? 'checked' : ''}> ${l}</label>`;
-  const msg = buildMsg(d, o, list);
   const card = (s) => {
     const fil = s.atividades.filter((a) => matchMotivo(a, mo)).slice().reverse();
     return `<div class="card sdr-card" style="margin-top:12px"><div class="row sp"><div><b>${esc(s.nome)}</b><div class="tiny muted">${s.atividades.length ? `Das ${s.primeira || '—'} às ${s.ultima || '—'} · ${s.contatos} contatos` : 'Sem atividade neste dia'}</div></div>${s.atrasados ? `<span class="chip bad">${s.atrasados} atrasados</span>` : ''}</div>
@@ -910,11 +906,6 @@ async function drawRel(fetchNew) {
     <div class="kpi"><div class="l">Ligações</div><div class="v">${num(t.ligacoes)}</div><div class="s">${num(t.atendidas)} atendidas</div></div>
     <div class="kpi"><div class="l">WhatsApp</div><div class="v">${num(t.whatsapp)}</div><div class="s">${num(t.respostas)} respostas</div></div>
     <div class="kpi hl"><div class="l">Vendas</div><div class="v">${num(t.vendas)}</div><div class="s">${money(t.valor)} · ${num(t.interessados)} interessados</div></div></div>
-  <details class="card" style="margin-top:12px" open><summary><b>Mensagem para enviar</b> <span class="muted small">— escolha o que entra e edite o texto</span></summary>
-    <div class="opts">${ck('resumo', 'Resumo do dia')}${ck('tabgeral', 'Tabulação por motivo')}${ck('tabsdr', 'Tabulação por SDR')}${ck('vendas', 'Vendas')}${ck('interessados', 'Interessados/propostas')}${ck('notas', 'Anotações')}${ck('atrasados', 'Retornos atrasados')}${ck('tel', 'Telefones')}</div>
-    <div class="row wrap" style="gap:8px"><input type="text" id="rcab" value="${esc(o.cab)}" placeholder="Título do relatório" style="flex:1;min-width:160px"><input type="text" id="rrod" value="${esc(o.rod)}" placeholder="Rodapé (ex.: assinatura)" style="flex:1;min-width:160px"></div>
-    <textarea id="rmsg" rows="14" style="width:100%;margin-top:8px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px">${esc(msg)}</textarea>
-    <div class="row wrap" style="gap:8px;margin-top:8px"><button class="btn sm" data-act="relcopy">${ic('copy', 16)} Copiar</button><button class="btn sec sm" data-act="relwa">Abrir no WhatsApp</button><button class="btn sec sm" data-act="relregen">Refazer texto</button></div></details>
   <div class="sec-title">Filtrar por motivo</div>${fchips}
   ${list.map(card).join('') || '<p class="muted">Nenhuma SDR cadastrada.</p>'}`;
 }
@@ -927,14 +918,49 @@ document.addEventListener('input', (e) => {
   const o = relOpts(); o.cab = $('#rcab').value; o.rod = $('#rrod').value; relSave(o); regenMsg();
 });
 function regenMsg() {
-  const d = S.rel.d, ta = $('#rmsg'); if (!d || !ta) return;
-  const list = d.sdrs.filter((s) => !S.rel.user || String(s.id) === String(S.rel.user));
+  const d = S.env.d, ta = $('#rmsg'); if (!d || !ta) return;
+  const list = d.sdrs.filter((s) => !S.env.user || String(s.id) === String(S.env.user));
   ta.value = buildMsg(d, relOpts(), list);
 }
 ACT.relregen = () => { regenMsg(); toast('Texto refeito'); };
 ACT.relcopy = async () => { try { await navigator.clipboard.writeText($('#rmsg').value); toast('Copiado — cole no WhatsApp'); } catch (e) { $('#rmsg').select(); toast('Selecione e copie manualmente', true); } };
 ACT.relwa = () => { window.open('https://wa.me/?text=' + encodeURIComponent($('#rmsg').value), '_blank'); };
 ACT.relprint = () => { document.querySelectorAll('#rbody details').forEach((x) => { x.open = true; }); window.print(); };
+
+/* ---------- enviar relatório (gestor) ---------- */
+S.env = S.env || { data: '', user: '', d: null };
+VIEWS.envio = async () => {
+  if (!S.env.data) S.env.data = hojeISO();
+  const o = relOpts(), ck = (k, l) => `<label class="chk"><input type="checkbox" data-opt="${k}" ${o[k] ? 'checked' : ''}> ${l}</label>`;
+  $('#main').innerHTML = `<div class="top"><div><h1>Enviar relatório</h1><div class="muted small">Monte a mensagem do dia, ajuste e envie</div></div></div>
+  <div class="env-grid">
+    <div class="card"><div class="sec-title" style="margin-top:0">Dia e SDR</div>
+      <div class="row wrap" style="gap:8px"><input type="date" id="edata" value="${S.env.data}" max="${hojeISO()}" style="width:auto"><button class="btn sec sm" data-act="envdia" data-v="-1">‹ Anterior</button><button class="btn sec sm" data-act="envdia" data-v="0">Hoje</button></div>
+      <select id="euser" style="margin-top:8px"><option value="">Todas as SDRs</option></select>
+      <div class="sec-title">O que incluir</div>
+      <div class="opts col">${ck('resumo', 'Resumo do dia')}${ck('tabgeral', 'Tabulação por motivo')}${ck('tabsdr', 'Resultado por SDR')}${ck('vendas', 'Vendas')}${ck('interessados', 'Interessados e propostas')}${ck('notas', 'Anotações das SDRs')}${ck('atrasados', 'Retornos atrasados')}${ck('tel', 'Mostrar telefones')}</div>
+      <div class="sec-title">Texto</div>
+      <input type="text" id="rcab" value="${esc(o.cab)}" placeholder="Título (ex.: Relatório SDR)"><input type="text" id="rrod" value="${esc(o.rod)}" placeholder="Rodapé / assinatura" style="margin-top:8px"></div>
+    <div class="card"><div class="row sp"><b>Mensagem</b><span class="muted tiny">pode editar o texto</span></div>
+      <textarea id="rmsg" rows="22" style="width:100%;margin-top:8px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px" placeholder="Carregando…"></textarea>
+      <div class="row wrap" style="gap:8px;margin-top:8px"><button class="btn sm" data-act="relcopy">${ic('copy', 16)} Copiar</button><button class="btn sec sm" data-act="relwa">Abrir no WhatsApp</button><button class="btn sec sm" data-act="relregen">Refazer texto</button></div></div>
+  </div>`;
+  $('#edata').addEventListener('change', (e) => { S.env.data = e.target.value || hojeISO(); loadEnv(); });
+  $('#euser').addEventListener('change', (e) => { S.env.user = e.target.value; regenMsg(); });
+  loadEnv();
+};
+ACT.envdia = (t) => {
+  const v = Number(t.dataset.v);
+  if (v === 0) S.env.data = hojeISO();
+  else { const d = new Date(S.env.data + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + v); S.env.data = d.toISOString().slice(0, 10); }
+  $('#edata').value = S.env.data; loadEnv();
+};
+async function loadEnv() {
+  const ta = $('#rmsg'); if (!ta) return;
+  try { S.env.d = await api('/relatorio?data=' + S.env.data); } catch (e) { ta.value = e.message; return; }
+  const sel = $('#euser'); if (sel) sel.innerHTML = '<option value="">Todas as SDRs</option>' + S.env.d.sdrs.map((x) => `<option value="${x.id}" ${String(S.env.user) === String(x.id) ? 'selected' : ''}>${esc(x.nome)}</option>`).join('');
+  regenMsg();
+}
 
 /* editar atividade */
 ACT.editint = (t) => {
