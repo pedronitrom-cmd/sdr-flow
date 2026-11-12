@@ -884,14 +884,14 @@ ACT.reldia = (t) => {
   $('#rdata').value = S.rel.data; drawRel(true);
 };
 ACT.relmotivo = (t) => { S.rel.motivo = t.dataset.v; drawRel(); };
-const matchMotivo = (a, m) => !m || (m === 'nota' ? !!a.nota : m === 'ligacao' || m === 'whatsapp' ? a.canal === m : a.resultado === m);
+const matchMotivo = (a, m) => !m || (m === 'nota' ? !!a.nota : m === 'ligacao' || m === 'whatsapp' ? a.canal === m : (m === 'interessado' ? ['interessado', 'proposta', 'venda'].includes(a.resultado) : a.resultado === m));
 async function drawRel(fetchNew) {
   const box = $('#rbody'); if (!box) return;
   if (fetchNew) { box.innerHTML = '<p class="muted">Carregando…</p>'; try { S.rel.d = await api('/relatorio?data=' + S.rel.data); } catch (e) { box.innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; return; } const sel = $('#ruser'); if (sel) { sel.innerHTML = '<option value="">Todas as SDRs</option>' + S.rel.d.sdrs.map((s) => `<option value="${s.id}" ${String(S.rel.user) === String(s.id) ? 'selected' : ''}>${esc(s.nome)}</option>`).join(''); } }
   const d = S.rel.d, t = d.totais, mo = S.rel.motivo;
   const list = d.sdrs.filter((s) => !S.rel.user || String(s.id) === String(S.rel.user));
   const cnt = (m) => list.reduce((a, s) => a + s.atividades.filter((x) => matchMotivo(x, m)).length, 0);
-  const chips = [['', 'Todos'], ...MOTIVOS.filter((m) => cnt(m[0])).map((m) => [m[0], m[1]]), ['nota', 'Com anotação']];
+  const chips = [['', 'Todos'], ...MOTIVOS.filter((m) => cnt(m[0])).map((m) => [m[0], m[0] === 'interessado' ? 'Interessados (c/ proposta e venda)' : m[1]]), ['nota', 'Com anotação']];
   const fchips = `<div class="chips">${chips.map((c) => `<button class="fchip ${mo === c[0] ? 'on' : ''}" data-act="relmotivo" data-v="${c[0]}">${esc(c[1])} <b>${cnt(c[0])}</b></button>`).join('')}</div>`;
   const card = (s) => {
     const fil = s.atividades.filter((a) => matchMotivo(a, mo)).slice().reverse();
