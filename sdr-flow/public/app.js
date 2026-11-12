@@ -142,7 +142,7 @@ function viewLogin() {
 /* ---------- shell ---------- */
 const NAV = {
   sdr: [['fila', 'Fila', 'phone'], ['hoje', 'Hoje', 'calendar'], ['numeros', 'Números', 'chart'], ['contatos', 'Contatos', 'user']],
-  gestor: [['painel', 'Painel', 'chart'], ['contatos', 'Contatos', 'upload'], ['equipe', 'Equipe', 'users'], ['mensagens', 'Mensagens', 'msg'], ['config', 'Ajustes', 'sliders']]
+  gestor: [['painel', 'Painel', 'chart'], ['relatorio', 'Relatório', 'calendar'], ['contatos', 'Contatos', 'upload'], ['equipe', 'Equipe', 'users'], ['mensagens', 'Mensagens', 'msg'], ['config', 'Ajustes', 'sliders']]
 };
 function renderShell() {
   const nav = NAV[S.user.papel];
@@ -321,7 +321,7 @@ function drawFila() {
       <select data-bind="followup">${[['auto', 'Automático (regra da equipe)'], ['2h', 'Em 2 horas'], ['amanha', 'Amanhã às 9h'], ['3d', 'Em 3 dias'], ['7d', 'Em 1 semana'], ['nenhum', 'Sem retorno']].map((o) => `<option value="${o[0]}" ${f.followup === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}</select></label>` : ''}
     <label class="field"><span>Observação (opcional)</span><input type="text" data-bind="nota" value="${esc(f.nota)}" placeholder="Ex.: pediu para ligar depois das 18h"></label>
   </div>
-  ${f.historico && f.historico.length ? `<div class="sec-title">Histórico</div><div class="card"><div class="hist">${f.historico.map((h) => `<div class="h"><b>${h.canal === 'ligacao' ? 'Ligação' : h.canal === 'whatsapp' ? 'WhatsApp' : 'Nota'}</b> · ${RES_LABEL[h.resultado] || h.resultado}<div class="muted tiny">${esc(h.user_nome)} · ${new Date(h.criado_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}${h.nota ? ' · ' + esc(h.nota) : ''}</div></div>`).join('')}</div></div>` : ''}
+  ${f.historico && f.historico.length ? `<div class="sec-title">Histórico</div><div class="card">${histHtml(f.historico)}</div>` : ''}
   <div class="row savebar"><button class="btn sec" data-act="skip">${ic('skip', 18)} Pular</button><button class="btn grow" data-act="save">Salvar e próximo</button></div>`;
   updateWa();
 }
@@ -492,14 +492,28 @@ async function loadLeads(append) {
 }
 ACT.more = () => { S.lf.offset += 40; loadLeads(true); };
 
+const fdt = (ms) => new Date(ms).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+const CANAL_L = { ligacao: 'Ligação', whatsapp: 'WhatsApp', nota: 'Nota' };
+function histHtml(list) {
+  if (!list || !list.length) return '<p class="muted small">Nenhuma interação ainda.</p>';
+  return `<div class="hist">${list.map((h) => `<div class="h ${h.resultado === 'venda' ? 'venda' : ''}"><b>${CANAL_L[h.canal] || h.canal}</b> · ${RES_LABEL[h.resultado] || h.resultado}${h.valor ? ' · <b>' + money(h.valor) + '</b>' : ''}${h.origem === 'followup' ? ' <span class="chip">retorno</span>' : ''}
+    <div class="muted tiny">${esc(h.user_nome || h.sdr_nome || '')} · ${fdt(h.criado_em)}</div>${h.nota ? `<div class="nota">${esc(h.nota)}</div>` : ''}</div>`).join('')}</div>`;
+}
+function leadInfo(l) {
+  const rows = [['Empresa', l.empresa], ['CNPJ', l.cnpj], ['Ramo', l.ramo], ['Porte', l.porte], ['E-mail', l.email], ['Outro telefone', l.alt_tel ? fmtPhone(l.alt_tel) : ''], ['Campanha', l.lote],
+    ['Tentativas', l.tentativas], ['Último contato', l.ultimo_contato ? fdt(l.ultimo_contato) : ''], ['Próximo retorno', l.followup_em ? fdt(l.followup_em) : ''], ['Valor da venda', l.valor_venda ? money(l.valor_venda) : ''], ['Observações', l.obs]]
+    .filter((r) => r[1] !== null && r[1] !== undefined && r[1] !== '' && r[1] !== 0);
+  return rows.length ? `<div class="info">${rows.map((r) => `<div><span>${r[0]}</span><b>${esc(r[1])}</b></div>`).join('')}</div>` : '';
+}
 async function leadModal(id) {
   const r = await api('/leads/' + id), l = r.lead;
   const us = S.users || (S.users = await api('/usuarios'));
   modal(`<div class="row sp"><h2>${esc(l.nome)}</h2>${statusChip(l.status)}</div>
     <div class="muted" style="margin-top:4px">${fmtPhone(l.telefone)}${l.cidade ? ' · ' + esc(l.cidade) : ''}${l.consumo ? ' · ' + esc(l.consumo) : ''}</div>
+    ${leadInfo(l)}
     <label class="field"><span>Responsável</span><select id="own"><option value="">Sem dono</option>${us.filter((u) => u.papel === 'sdr' && u.ativo).map((u) => `<option value="${u.id}" ${l.owner_id === u.id ? 'selected' : ''}>${esc(u.nome)}</option>`).join('')}</select></label>
     <div class="sec-title">Histórico</div>
-    ${r.historico.length ? `<div class="hist">${r.historico.map((h) => `<div class="h"><b>${h.canal === 'ligacao' ? 'Ligação' : h.canal === 'whatsapp' ? 'WhatsApp' : 'Nota'}</b> · ${RES_LABEL[h.resultado] || h.resultado}<div class="muted tiny">${esc(h.user_nome)} · ${new Date(h.criado_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}${h.nota ? ' · ' + esc(h.nota) : ''}</div></div>`).join('')}</div>` : '<p class="muted small">Nenhuma interação ainda.</p>'}
+    ${histHtml(r.historico)}
     ${S.user.papel === 'gestor' ? `<button class="btn danger sm block" style="margin-top:14px" data-act="dellead" data-id="${l.id}" data-nome="${esc(l.nome)}" data-tel="${esc(fmtPhone(l.telefone))}">Excluir este contato</button>` : ''}
     <div class="row" style="margin-top:12px"><button class="btn sec grow" data-act="close">Fechar</button><button class="btn grow" data-act="assign" data-id="${l.id}">Salvar responsável</button></div>`);
 }
@@ -754,7 +768,8 @@ ACT.dodist = async (t) => {
 
 /* ---------- painel (gestor) ---------- */
 VIEWS.painel = async (silent) => {
-  const d = await api('/stats/equipe?periodo=' + S.periodo), t = d.totais, fn = d.funil;
+  const [d, vd, nt] = await Promise.all([api('/stats/equipe?periodo=' + S.periodo), api('/atividades?limit=50&resultado=venda&periodo=' + S.periodo), api('/atividades?limit=15&so_notas=1&periodo=' + S.periodo)]);
+  const t = d.totais, fn = d.funil;
   const lbl = { hoje: 'Hoje', '7d': '7 dias', mes: 'Este mês', '30d': '30 dias' };
   const atras = d.equipe.reduce((a, s) => a + s.atrasados, 0);
   const ranking = d.equipe.slice().sort((a, b) => b.vendas - a.vendas || b.interessados - a.interessados || (b.ligacoes + b.whatsapp) - (a.ligacoes + a.whatsapp));
@@ -778,6 +793,10 @@ VIEWS.painel = async (silent) => {
       ${S.periodo === 'hoje' ? progRow('Ligações', s.ligacoes, s.meta_ligacoes, 'g') + progRow('WhatsApp', s.whatsapp, s.meta_whatsapp, 'w') : ''}
       <div class="nums"><div><b>${num(s.ligacoes)}</b><span>ligações</span></div><div><b>${num(s.whatsapp)}</b><span>WhatsApp</span></div><div><b>${num(s.interessados)}</b><span>interessados</span></div><div><b>${num(s.vendas)}</b><span>vendas</span></div></div>
       <div class="muted tiny" style="margin-top:10px">Atendimento ${pct(s.atendidas, s.ligacoes)} · Resposta ${pct(s.respostas, s.whatsapp)} · ${s.followups} follow-ups feitos${s.valor ? ' · ' + money(s.valor) : ''}</div></div>`).join('') : '<div class="card"><p class="muted">Cadastre as SDRs na aba Equipe para acompanhar a produtividade.</p></div>'}
+  <div class="sec-title">Vendas do período (${vd.total})</div>
+  <div class="card" style="padding:6px 14px">${vd.itens.length ? vd.itens.map((a) => atvRow(a)).join('') : '<p class="muted small" style="padding:8px 0">Nenhuma venda no período.</p>'}</div>
+  <div class="sec-title">O que as SDRs escreveram</div>
+  <div class="card" style="padding:6px 14px">${nt.itens.length ? nt.itens.map((a) => atvRow(a)).join('') + (nt.total > nt.itens.length ? `<button class="btn sec sm block" style="margin:8px 0" data-act="nav" data-v="relatorio">Ver tudo no Relatório</button>` : '') : '<p class="muted small" style="padding:8px 0">Nenhuma anotação no período.</p>'}</div>
   <div class="sec-title">Contatos por dia</div><div class="card">${barsDias(d.dias)}</div>
   <div class="sec-title">Atividade por hora</div><div class="card">${hoursHeat(d.horas)}</div>`;
   if (!silent) { clearInterval(S.timer); S.timer = setInterval(() => { if (S.view === 'painel' && !$('#modal')) VIEWS.painel(true).catch(() => {}); }, 30000); }
@@ -791,6 +810,51 @@ ACT.export = async () => {
     a.href = URL.createObjectURL(blob); a.download = 'sdr-flow-atividades.csv'; document.body.appendChild(a); a.click(); a.remove();
   } catch (e) { toast(e.message, true); }
 };
+
+/* ---------- atividades / relatório (gestor) ---------- */
+function atvRow(a) {
+  return `<div class="list-item atv" data-act="open" data-id="${a.lead_id}"><div class="ava ${a.resultado === 'venda' ? 'ok' : ''}">${esc(first(a.nome)[0] || '?')}</div>
+    <div class="grow"><div class="row sp"><b>${esc(a.nome)}${a.empresa ? ' · ' + esc(a.empresa) : ''}</b><span class="tiny muted">${fdt(a.criado_em)}</span></div>
+      <div class="muted small">${fmtPhone(a.telefone)}${a.cidade ? ' · ' + esc(a.cidade) : ''} · ${esc(a.sdr_nome)}</div>
+      <div class="small" style="margin-top:2px">${CANAL_L[a.canal] || a.canal} · ${RES_LABEL[a.resultado] || a.resultado}${a.valor ? ' · <b>' + money(a.valor) + '</b>' : ''}</div>
+      ${a.nota ? `<div class="nota">${esc(a.nota)}</div>` : ''}</div></div>`;
+}
+const hojeISO = () => new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+S.rel = S.rel || { data: '', user: '', d: null };
+VIEWS.relatorio = async () => {
+  if (!S.rel.data) S.rel.data = hojeISO();
+  $('#main').innerHTML = `<div class="top"><div><h1>Relatório do dia</h1><div class="muted small">O que cada SDR fez, com as anotações</div></div></div>
+  <div class="card row wrap" style="gap:8px;margin-bottom:12px"><input type="date" id="rdata" value="${S.rel.data}" max="${hojeISO()}" style="width:auto">
+    <button class="btn sec sm" data-act="reldia" data-v="-1">‹ Dia anterior</button><button class="btn sec sm" data-act="reldia" data-v="0">Hoje</button>
+    <select id="ruser" style="width:auto"><option value="">Todas as SDRs</option></select></div>
+  <div id="rbody"><p class="muted">Carregando…</p></div>`;
+  $('#rdata').addEventListener('change', (e) => { S.rel.data = e.target.value || hojeISO(); drawRel(true); });
+  $('#ruser').addEventListener('change', (e) => { S.rel.user = e.target.value; drawRel(); });
+  drawRel(true);
+};
+ACT.reldia = (t) => {
+  const v = Number(t.dataset.v);
+  if (v === 0) S.rel.data = hojeISO();
+  else { const d = new Date(S.rel.data + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + v); S.rel.data = d.toISOString().slice(0, 10); }
+  $('#rdata').value = S.rel.data; drawRel(true);
+};
+async function drawRel(fetchNew) {
+  const box = $('#rbody'); if (!box) return;
+  if (fetchNew) { box.innerHTML = '<p class="muted">Carregando…</p>'; try { S.rel.d = await api('/relatorio?data=' + S.rel.data); } catch (e) { box.innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; return; } const sel = $('#ruser'); if (sel) { sel.innerHTML = '<option value="">Todas as SDRs</option>' + S.rel.d.sdrs.map((s) => `<option value="${s.id}" ${String(S.rel.user) === String(s.id) ? 'selected' : ''}>${esc(s.nome)}</option>`).join(''); } }
+  const d = S.rel.d, t = d.totais;
+  const list = d.sdrs.filter((s) => !S.rel.user || String(s.id) === String(S.rel.user));
+  box.innerHTML = `<div class="row sp wrap" style="margin-bottom:8px"><h2 style="margin:0">${esc(d.titulo.charAt(0).toUpperCase() + d.titulo.slice(1))}</h2><div class="row"><button class="btn sec sm" data-act="relcopy">${ic('copy', 16)} Copiar texto</button><button class="btn sec sm" data-act="relprint">Imprimir / PDF</button></div></div>
+  <div class="kpis"><div class="kpi"><div class="l">Contatos</div><div class="v">${num(t.contatos)}</div><div class="s">trabalhados</div></div>
+    <div class="kpi"><div class="l">Ligações</div><div class="v">${num(t.ligacoes)}</div><div class="s">${num(t.atendidas)} atendidas</div></div>
+    <div class="kpi"><div class="l">WhatsApp</div><div class="v">${num(t.whatsapp)}</div><div class="s">${num(t.respostas)} respostas</div></div>
+    <div class="kpi hl"><div class="l">Vendas</div><div class="v">${num(t.vendas)}</div><div class="s">${money(t.valor)} · ${num(t.interessados)} interessados</div></div></div>
+  ${list.map((s) => `<div class="card sdr-card" style="margin-top:12px"><div class="row sp"><div><b>${esc(s.nome)}</b><div class="tiny muted">${s.atividades.length ? `Das ${s.primeira || '—'} às ${s.ultima || '—'} · ${s.contatos} contatos` : 'Sem atividade neste dia'}</div></div>${s.atrasados ? `<span class="chip bad">${s.atrasados} atrasados</span>` : ''}</div>
+    <div class="nums"><div><b>${num(s.ligacoes)}</b><span>ligações</span></div><div><b>${num(s.whatsapp)}</b><span>WhatsApp</span></div><div><b>${num(s.interessados)}</b><span>interessados</span></div><div><b>${num(s.vendas)}</b><span>vendas</span></div></div>
+    ${s.vendas_lista.length ? `<div class="sec-title">Vendas</div>${s.vendas_lista.map((a) => atvRow({ ...a, sdr_nome: s.nome, criado_em: a.criado_em })).join('')}` : ''}
+    ${s.atividades.length ? `<details style="margin-top:10px"><summary class="small"><b>Todas as atividades (${s.atividades.length})</b></summary>${s.atividades.slice().reverse().map((a) => atvRow({ ...a, sdr_nome: s.nome })).join('')}</details>` : ''}</div>`).join('') || '<p class="muted">Nenhuma SDR cadastrada.</p>'}`;
+}
+ACT.relcopy = async () => { try { await navigator.clipboard.writeText(S.rel.d.texto); toast('Relatório copiado — cole no WhatsApp'); } catch (e) { toast('Não foi possível copiar', true); } };
+ACT.relprint = () => { document.querySelectorAll('#rbody details').forEach((x) => { x.open = true; }); window.print(); };
 
 /* ---------- equipe ---------- */
 VIEWS.equipe = async () => {
