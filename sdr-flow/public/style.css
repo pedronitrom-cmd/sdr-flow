@@ -91,6 +91,8 @@ textarea{resize:vertical;min-height:90px}
 .act{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:20px 8px;border-radius:18px;color:#fff;font-weight:700;font-size:17px;min-height:98px;transition:transform .08s}
 .act:active{transform:scale(.97)}
 .act.call{background:var(--call)}.act.wa{background:var(--wa)}
+.act.wacall{grid-column:1/-1;background:#0B5D52;flex-direction:row;flex-wrap:wrap;gap:4px 10px;min-height:66px;padding:12px 8px;font-size:16px}
+.act.wacall small{flex-basis:100%;text-align:center;margin-top:-2px}
 .act[disabled]{opacity:.5}
 .act small{font-weight:500;font-size:12px;opacity:.9}
 .results{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:10px}

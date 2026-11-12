@@ -303,6 +303,7 @@ function drawFila() {
     <div class="actions">
       <button class="act call" data-act="call">${ic('phone', 28)}Ligar<small>${fmtPhone(l.telefone)}</small></button>
       <button class="act wa" id="wabtn" data-act="wa">${ic('chat', 28)}WhatsApp<small id="wasub">${st.hoje.whatsapp >= lim ? 'Limite do dia atingido' : 'Abrir conversa'}</small></button>
+      <button class="act wacall" data-act="wacall">${ic('phone', 22)}Chamar no WhatsApp (voz)<small>abre a conversa, toque no telefone</small></button>
     </div>
     <div class="msgbox">
       <div class="row sp"><b class="small">Mensagem do WhatsApp</b><button class="btn ghost sm" data-act="rotate">${ic('refresh', 16)} Outra versão</button></div>
@@ -340,7 +341,15 @@ ACT.call = () => {
   const f = S.fila;
   const a = document.createElement('a'); a.href = 'tel:+' + f.lead.telefone;
   document.body.appendChild(a); a.click(); a.remove();
-  f.canal = 'ligacao'; if (!RES_LIG.some((r) => r[0] === f.resultado)) f.resultado = null;
+  f.canal = 'ligacao'; f.viaWa = false; if (!RES_LIG.some((r) => r[0] === f.resultado)) f.resultado = null;
+  drawFila();
+};
+ACT.wacall = () => {
+  const f = S.fila;
+  const url = isMobile() ? `https://wa.me/${f.lead.telefone}` : `https://web.whatsapp.com/send?phone=${f.lead.telefone}`;
+  window.open(url, isMobile() ? '_blank' : 'sdrflow_wa');
+  f.canal = 'ligacao'; f.viaWa = true; if (!RES_LIG.some((r) => r[0] === f.resultado)) f.resultado = null;
+  toast('Na conversa, toque no ícone de telefone para ligar');
   drawFila();
 };
 ACT.wa = () => {
@@ -370,7 +379,7 @@ ACT.unskip = () => { S.skip = []; loadFila(); };
 ACT.save = async (t) => {
   const f = S.fila;
   if (!f.canal || !f.resultado) return toast('Escolha o canal e o resultado', true);
-  const body = { canal: f.canal, resultado: f.resultado, nota: f.nota, origem: f.motivo === 'followup' ? 'followup' : null };
+  const body = { canal: f.canal, resultado: f.resultado, nota: ((f.viaWa && f.canal === 'ligacao' ? '[Ligação pelo WhatsApp] ' : '') + (f.nota || '')).trim(), origem: f.motivo === 'followup' ? 'followup' : null };
   if (f.resultado === 'venda' && f.valor) body.valor = parseFloat(String(f.valor).replace(',', '.'));
   const fu = followupMs(f.followup);
   if (fu !== undefined) body.followup_em = fu;
