@@ -494,10 +494,12 @@ ACT.more = () => { S.lf.offset += 40; loadLeads(true); };
 
 const fdt = (ms) => new Date(ms).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 const CANAL_L = { ligacao: 'Ligação', whatsapp: 'WhatsApp', nota: 'Nota' };
+S.ints = {};
+const editBtn = (h) => { if (!h.id || S.user.papel !== 'gestor') return ''; S.ints[h.id] = h; return ` <button class="lnk" data-act="editint" data-id="${h.id}">Editar</button>`; };
 function histHtml(list) {
   if (!list || !list.length) return '<p class="muted small">Nenhuma interação ainda.</p>';
   return `<div class="hist">${list.map((h) => `<div class="h ${h.resultado === 'venda' ? 'venda' : ''}"><b>${CANAL_L[h.canal] || h.canal}</b> · ${RES_LABEL[h.resultado] || h.resultado}${h.valor ? ' · <b>' + money(h.valor) + '</b>' : ''}${h.origem === 'followup' ? ' <span class="chip">retorno</span>' : ''}
-    <div class="muted tiny">${esc(h.user_nome || h.sdr_nome || '')} · ${fdt(h.criado_em)}</div>${h.nota ? `<div class="nota">${esc(h.nota)}</div>` : ''}</div>`).join('')}</div>`;
+    <div class="muted tiny">${esc(h.user_nome || h.sdr_nome || '')} · ${fdt(h.criado_em)}${editBtn(h)}</div>${h.nota ? `<div class="nota">${esc(h.nota)}</div>` : ''}</div>`).join('')}</div>`;
 }
 function leadInfo(l) {
   const rows = [['Empresa', l.empresa], ['CNPJ', l.cnpj], ['Ramo', l.ramo], ['Porte', l.porte], ['E-mail', l.email], ['Outro telefone', l.alt_tel ? fmtPhone(l.alt_tel) : ''], ['Campanha', l.lote],
@@ -814,13 +816,58 @@ ACT.export = async () => {
 /* ---------- atividades / relatório (gestor) ---------- */
 function atvRow(a) {
   return `<div class="list-item atv" data-act="open" data-id="${a.lead_id}"><div class="ava ${a.resultado === 'venda' ? 'ok' : ''}">${esc(first(a.nome)[0] || '?')}</div>
-    <div class="grow"><div class="row sp"><b>${esc(a.nome)}${a.empresa ? ' · ' + esc(a.empresa) : ''}</b><span class="tiny muted">${fdt(a.criado_em)}</span></div>
+    <div class="grow"><div class="row sp"><b>${esc(a.nome)}${a.empresa ? ' · ' + esc(a.empresa) : ''}</b><span class="tiny muted">${fdt(a.criado_em)}${editBtn(a)}</span></div>
       <div class="muted small">${fmtPhone(a.telefone)}${a.cidade ? ' · ' + esc(a.cidade) : ''} · ${esc(a.sdr_nome)}</div>
       <div class="small" style="margin-top:2px">${CANAL_L[a.canal] || a.canal} · ${RES_LABEL[a.resultado] || a.resultado}${a.valor ? ' · <b>' + money(a.valor) + '</b>' : ''}</div>
       ${a.nota ? `<div class="nota">${esc(a.nota)}</div>` : ''}</div></div>`;
 }
 const hojeISO = () => new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
-S.rel = S.rel || { data: '', user: '', d: null };
+const MOTIVOS = [['nao_atendeu', 'Não atendeu', 'N.Atend'], ['caixa_postal', 'Caixa postal', 'CxPost'], ['falou', 'Falou com o cliente', 'Falou'], ['respondeu', 'Respondeu (WhatsApp)', 'Resp'], ['enviado', 'Mensagem enviada', 'Enviada'], ['interessado', 'Interessado', 'Interes'], ['proposta', 'Proposta enviada', 'Propost'], ['venda', 'Venda fechada', 'Venda'], ['sem_interesse', 'Sem interesse', 'S.Int'], ['invalido', 'Número inválido', 'Invál']];
+S.rel = S.rel || { data: '', user: '', motivo: '', d: null };
+const REL_DEF = { resumo: true, tabgeral: true, tabsdr: true, vendas: true, interessados: true, notas: true, atrasados: false, tel: false, cab: 'Relatório SDR', rod: '' };
+function relOpts() { let o = {}; try { o = JSON.parse(localStorage.getItem('sdrflow_relopts') || '{}'); } catch (e) { /* sem storage */ } return { ...REL_DEF, ...o }; }
+function relSave(o) { try { localStorage.setItem('sdrflow_relopts', JSON.stringify(o)); } catch (e) { /* sem storage */ } }
+const trab = (s) => s.atividades.filter((a) => a.canal !== 'nota');
+function buildMsg(d, o, sdrs) {
+  const L = [], pad = (x, n) => String(x).padEnd(n), lp = (x, n) => String(x).padStart(n);
+  const ttl = d.titulo.charAt(0).toUpperCase() + d.titulo.slice(1);
+  const all = sdrs.flatMap((s) => trab(s).map((a) => ({ ...a, sdr: s.nome })));
+  const sum = (k) => sdrs.reduce((a, s) => a + (s[k] || 0), 0);
+  L.push(`*${o.cab || 'Relatório'} – ${ttl}*`, '');
+  if (o.resumo) {
+    L.push('*Resumo do dia*', `• Contatos trabalhados: ${new Set(all.map((a) => a.lead_id)).size}`, `• Ligações: ${sum('ligacoes')} (${sum('atendidas')} atendidas)`, `• WhatsApp enviados: ${sum('whatsapp')} (${sum('respostas')} respostas)`, `• Interessados: ${sum('interessados')} · Propostas: ${sum('propostas')}`, `• Vendas: ${sum('vendas')}${sum('valor') ? ' – ' + money(sum('valor')) : ''}`, '');
+  }
+  if (o.tabgeral) {
+    const rows = MOTIVOS.map((m) => [m[1], all.filter((a) => a.resultado === m[0] && a.canal === 'ligacao').length, all.filter((a) => a.resultado === m[0] && a.canal === 'whatsapp').length]).filter((r) => r[1] + r[2] > 0);
+    if (rows.length) {
+      const w = Math.max(6, ...rows.map((r) => r[0].length));
+      L.push('*Tabulação do dia*', '```', `${pad('Motivo', w)}  Lig   WA  Total`);
+      rows.forEach((r) => L.push(`${pad(r[0], w)}  ${lp(r[1], 3)}  ${lp(r[2], 3)}  ${lp(r[1] + r[2], 5)}`));
+      const tl = rows.reduce((a, r) => a + r[1], 0), tw = rows.reduce((a, r) => a + r[2], 0);
+      L.push(`${pad('TOTAL', w)}  ${lp(tl, 3)}  ${lp(tw, 3)}  ${lp(tl + tw, 5)}`, '```', '');
+    }
+  }
+  if (o.tabsdr && sdrs.length) {
+    const cols = MOTIVOS.filter((m) => all.some((a) => a.resultado === m[0]));
+    if (cols.length) {
+      const w = Math.max(4, ...sdrs.map((s) => Math.min(10, s.nome.length)));
+      L.push('*Tabulação por SDR*', '```', `${pad('SDR', w)} ${cols.map((m) => lp(m[2], 7)).join(' ')}  Total`);
+      sdrs.forEach((s) => { const t = trab(s); L.push(`${pad(s.nome.slice(0, 10), w)} ${cols.map((m) => lp(t.filter((a) => a.resultado === m[0]).length, 7)).join(' ')}  ${lp(t.length, 5)}`); });
+      L.push('```', '');
+    }
+  }
+  const fl = (a) => `${a.nome}${a.empresa ? ' (' + a.empresa + ')' : ''}${a.cidade ? ' – ' + a.cidade : ''}${o.tel ? ' – ' + fmtPhone(a.telefone) : ''}`;
+  const lista = (titulo, arr) => { if (!arr.length) return; L.push(`*${titulo} (${arr.length})*`); arr.forEach((a) => L.push(`• ${fl(a)} – ${a.sdr}${a.valor ? ' – ' + money(a.valor) : ''}${a.nota ? '\n   “' + a.nota + '”' : ''}`)); L.push(''); };
+  if (o.vendas) lista('Vendas', all.filter((a) => a.resultado === 'venda'));
+  if (o.interessados) lista('Interessados e propostas', all.filter((a) => ['interessado', 'proposta'].includes(a.resultado)));
+  if (o.notas) {
+    const n = all.filter((a) => a.nota && !['venda', 'interessado', 'proposta'].includes(a.resultado));
+    if (n.length) { L.push(`*Anotações das SDRs (${n.length})*`); n.forEach((a) => L.push(`• ${a.hora} ${a.sdr} – ${a.nome}: “${a.nota}”`)); L.push(''); }
+  }
+  if (o.atrasados) { const at = sdrs.filter((s) => s.atrasados); if (at.length) { L.push('*Retornos atrasados*'); at.forEach((s) => L.push(`• ${s.nome}: ${s.atrasados}`)); L.push(''); } }
+  if (o.rod) L.push(o.rod);
+  return L.join('\n').trim();
+}
 VIEWS.relatorio = async () => {
   if (!S.rel.data) S.rel.data = hojeISO();
   $('#main').innerHTML = `<div class="top"><div><h1>Relatório do dia</h1><div class="muted small">O que cada SDR fez, com as anotações</div></div></div>
@@ -838,23 +885,78 @@ ACT.reldia = (t) => {
   else { const d = new Date(S.rel.data + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + v); S.rel.data = d.toISOString().slice(0, 10); }
   $('#rdata').value = S.rel.data; drawRel(true);
 };
+ACT.relmotivo = (t) => { S.rel.motivo = t.dataset.v; drawRel(); };
+const matchMotivo = (a, m) => !m || (m === 'nota' ? !!a.nota : m === 'ligacao' || m === 'whatsapp' ? a.canal === m : a.resultado === m);
 async function drawRel(fetchNew) {
   const box = $('#rbody'); if (!box) return;
   if (fetchNew) { box.innerHTML = '<p class="muted">Carregando…</p>'; try { S.rel.d = await api('/relatorio?data=' + S.rel.data); } catch (e) { box.innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; return; } const sel = $('#ruser'); if (sel) { sel.innerHTML = '<option value="">Todas as SDRs</option>' + S.rel.d.sdrs.map((s) => `<option value="${s.id}" ${String(S.rel.user) === String(s.id) ? 'selected' : ''}>${esc(s.nome)}</option>`).join(''); } }
-  const d = S.rel.d, t = d.totais;
+  const d = S.rel.d, t = d.totais, mo = S.rel.motivo, o = relOpts();
   const list = d.sdrs.filter((s) => !S.rel.user || String(s.id) === String(S.rel.user));
-  box.innerHTML = `<div class="row sp wrap" style="margin-bottom:8px"><h2 style="margin:0">${esc(d.titulo.charAt(0).toUpperCase() + d.titulo.slice(1))}</h2><div class="row"><button class="btn sec sm" data-act="relcopy">${ic('copy', 16)} Copiar texto</button><button class="btn sec sm" data-act="relprint">Imprimir / PDF</button></div></div>
+  const cnt = (m) => list.reduce((a, s) => a + s.atividades.filter((x) => matchMotivo(x, m)).length, 0);
+  const chips = [['', 'Todos'], ...MOTIVOS.filter((m) => cnt(m[0])).map((m) => [m[0], m[1]]), ['nota', 'Com anotação']];
+  const fchips = `<div class="chips">${chips.map((c) => `<button class="fchip ${mo === c[0] ? 'on' : ''}" data-act="relmotivo" data-v="${c[0]}">${esc(c[1])} <b>${cnt(c[0])}</b></button>`).join('')}</div>`;
+  const ck = (k, l) => `<label class="chk"><input type="checkbox" data-opt="${k}" ${o[k] ? 'checked' : ''}> ${l}</label>`;
+  const msg = buildMsg(d, o, list);
+  const card = (s) => {
+    const fil = s.atividades.filter((a) => matchMotivo(a, mo)).slice().reverse();
+    return `<div class="card sdr-card" style="margin-top:12px"><div class="row sp"><div><b>${esc(s.nome)}</b><div class="tiny muted">${s.atividades.length ? `Das ${s.primeira || '—'} às ${s.ultima || '—'} · ${s.contatos} contatos` : 'Sem atividade neste dia'}</div></div>${s.atrasados ? `<span class="chip bad">${s.atrasados} atrasados</span>` : ''}</div>
+    <div class="nums"><div><b>${num(s.ligacoes)}</b><span>ligações</span></div><div><b>${num(s.whatsapp)}</b><span>WhatsApp</span></div><div><b>${num(s.interessados)}</b><span>interessados</span></div><div><b>${num(s.vendas)}</b><span>vendas</span></div></div>
+    ${mo ? (fil.length ? `<div class="sec-title">${fil.length} atividade${fil.length === 1 ? '' : 's'} no filtro</div>${fil.map((a) => atvRow({ ...a, sdr_nome: s.nome })).join('')}` : '<p class="muted small" style="margin-top:10px">Nada neste filtro.</p>')
+    : `${s.vendas_lista.length ? `<div class="sec-title">Vendas</div>${s.vendas_lista.map((a) => atvRow({ ...a, sdr_nome: s.nome })).join('')}` : ''}
+    ${s.atividades.length ? `<details style="margin-top:10px"><summary class="small"><b>Todas as atividades (${s.atividades.length})</b></summary>${fil.map((a) => atvRow({ ...a, sdr_nome: s.nome })).join('')}</details>` : ''}`}</div>`;
+  };
+  box.innerHTML = `<div class="row sp wrap" style="margin-bottom:8px"><h2 style="margin:0">${esc(d.titulo.charAt(0).toUpperCase() + d.titulo.slice(1))}</h2><button class="btn sec sm" data-act="relprint">Imprimir / PDF</button></div>
   <div class="kpis"><div class="kpi"><div class="l">Contatos</div><div class="v">${num(t.contatos)}</div><div class="s">trabalhados</div></div>
     <div class="kpi"><div class="l">Ligações</div><div class="v">${num(t.ligacoes)}</div><div class="s">${num(t.atendidas)} atendidas</div></div>
     <div class="kpi"><div class="l">WhatsApp</div><div class="v">${num(t.whatsapp)}</div><div class="s">${num(t.respostas)} respostas</div></div>
     <div class="kpi hl"><div class="l">Vendas</div><div class="v">${num(t.vendas)}</div><div class="s">${money(t.valor)} · ${num(t.interessados)} interessados</div></div></div>
-  ${list.map((s) => `<div class="card sdr-card" style="margin-top:12px"><div class="row sp"><div><b>${esc(s.nome)}</b><div class="tiny muted">${s.atividades.length ? `Das ${s.primeira || '—'} às ${s.ultima || '—'} · ${s.contatos} contatos` : 'Sem atividade neste dia'}</div></div>${s.atrasados ? `<span class="chip bad">${s.atrasados} atrasados</span>` : ''}</div>
-    <div class="nums"><div><b>${num(s.ligacoes)}</b><span>ligações</span></div><div><b>${num(s.whatsapp)}</b><span>WhatsApp</span></div><div><b>${num(s.interessados)}</b><span>interessados</span></div><div><b>${num(s.vendas)}</b><span>vendas</span></div></div>
-    ${s.vendas_lista.length ? `<div class="sec-title">Vendas</div>${s.vendas_lista.map((a) => atvRow({ ...a, sdr_nome: s.nome, criado_em: a.criado_em })).join('')}` : ''}
-    ${s.atividades.length ? `<details style="margin-top:10px"><summary class="small"><b>Todas as atividades (${s.atividades.length})</b></summary>${s.atividades.slice().reverse().map((a) => atvRow({ ...a, sdr_nome: s.nome })).join('')}</details>` : ''}</div>`).join('') || '<p class="muted">Nenhuma SDR cadastrada.</p>'}`;
+  <details class="card" style="margin-top:12px" open><summary><b>Mensagem para enviar</b> <span class="muted small">— escolha o que entra e edite o texto</span></summary>
+    <div class="opts">${ck('resumo', 'Resumo do dia')}${ck('tabgeral', 'Tabulação por motivo')}${ck('tabsdr', 'Tabulação por SDR')}${ck('vendas', 'Vendas')}${ck('interessados', 'Interessados/propostas')}${ck('notas', 'Anotações')}${ck('atrasados', 'Retornos atrasados')}${ck('tel', 'Telefones')}</div>
+    <div class="row wrap" style="gap:8px"><input type="text" id="rcab" value="${esc(o.cab)}" placeholder="Título do relatório" style="flex:1;min-width:160px"><input type="text" id="rrod" value="${esc(o.rod)}" placeholder="Rodapé (ex.: assinatura)" style="flex:1;min-width:160px"></div>
+    <textarea id="rmsg" rows="14" style="width:100%;margin-top:8px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px">${esc(msg)}</textarea>
+    <div class="row wrap" style="gap:8px;margin-top:8px"><button class="btn sm" data-act="relcopy">${ic('copy', 16)} Copiar</button><button class="btn sec sm" data-act="relwa">Abrir no WhatsApp</button><button class="btn sec sm" data-act="relregen">Refazer texto</button></div></details>
+  <div class="sec-title">Filtrar por motivo</div>${fchips}
+  ${list.map(card).join('') || '<p class="muted">Nenhuma SDR cadastrada.</p>'}`;
 }
-ACT.relcopy = async () => { try { await navigator.clipboard.writeText(S.rel.d.texto); toast('Relatório copiado — cole no WhatsApp'); } catch (e) { toast('Não foi possível copiar', true); } };
+document.addEventListener('change', (e) => {
+  const k = e.target.dataset && e.target.dataset.opt; if (!k) return;
+  const o = relOpts(); o[k] = e.target.checked; relSave(o); regenMsg();
+});
+document.addEventListener('input', (e) => {
+  if (e.target.id !== 'rcab' && e.target.id !== 'rrod') return;
+  const o = relOpts(); o.cab = $('#rcab').value; o.rod = $('#rrod').value; relSave(o); regenMsg();
+});
+function regenMsg() {
+  const d = S.rel.d, ta = $('#rmsg'); if (!d || !ta) return;
+  const list = d.sdrs.filter((s) => !S.rel.user || String(s.id) === String(S.rel.user));
+  ta.value = buildMsg(d, relOpts(), list);
+}
+ACT.relregen = () => { regenMsg(); toast('Texto refeito'); };
+ACT.relcopy = async () => { try { await navigator.clipboard.writeText($('#rmsg').value); toast('Copiado — cole no WhatsApp'); } catch (e) { $('#rmsg').select(); toast('Selecione e copie manualmente', true); } };
+ACT.relwa = () => { window.open('https://wa.me/?text=' + encodeURIComponent($('#rmsg').value), '_blank'); };
 ACT.relprint = () => { document.querySelectorAll('#rbody details').forEach((x) => { x.open = true; }); window.print(); };
+
+/* editar atividade */
+ACT.editint = (t) => {
+  const h = S.ints[t.dataset.id]; if (!h) return;
+  const opts = { ligacao: RES_LIG, whatsapp: RES_WA, nota: [['nota', 'Anotação']] }[h.canal] || [];
+  modal(`<h2>Editar atividade</h2><div class="muted small">${CANAL_L[h.canal] || h.canal} · ${esc(h.nome || '')} · ${fdt(h.criado_em)}</div>
+    <label class="field"><span>Motivo / resultado</span><select id="eres">${opts.map((o) => `<option value="${o[0]}" ${o[0] === h.resultado ? 'selected' : ''}>${o[1]}</option>`).join('')}</select></label>
+    <label class="field" id="evwrap" style="${h.resultado === 'venda' ? '' : 'display:none'}"><span>Valor da venda (R$)</span><input type="number" id="eval" value="${h.valor || ''}" min="0" step="any"></label>
+    <label class="field"><span>Anotação</span><textarea id="enota" rows="3">${esc(h.nota || '')}</textarea></label>
+    <p class="muted tiny">Se for a última atividade do contato, o status dele acompanha o novo motivo.</p>
+    <div class="row" style="margin-top:12px"><button class="btn sec grow" data-act="close">Cancelar</button><button class="btn grow" data-act="saveint" data-id="${h.id}">Salvar</button></div>`);
+  $('#eres').addEventListener('change', (e) => { $('#evwrap').style.display = e.target.value === 'venda' ? '' : 'none'; });
+};
+ACT.saveint = async (t) => {
+  try {
+    const body = { resultado: $('#eres').value, nota: $('#enota').value };
+    if (body.resultado === 'venda') body.valor = $('#eval').value;
+    await api('/interacoes/' + t.dataset.id, { method: 'PUT', body });
+    closeModal(); toast('Atividade atualizada');
+    if (S.view === 'relatorio') drawRel(true); else if (S.view === 'painel') VIEWS.painel(true); else if (S.view === 'contatos') loadLeads();
+  } catch (e) { toast(e.message, true); }
+};
 
 /* ---------- equipe ---------- */
 VIEWS.equipe = async () => {
