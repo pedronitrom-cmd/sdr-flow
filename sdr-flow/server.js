@@ -319,6 +319,80 @@ app.put('/api/leads/:id/atribuir', auth(['gestor']), wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+/* ---------- exclusão de contatos (gestor) ----------
+   "Não trabalhado" = status 'novo' e nenhuma interação registrada.
+   Excluir trabalhados apaga também as interações (ligações, WhatsApp, notas) desses contatos. */
+const LIMPO = `status='novo' AND NOT EXISTS (SELECT 1 FROM interacoes i WHERE i.lead_id = leads.id)`;
+async function contarLeads(where, args) {
+  const r = await get(`SELECT COUNT(*) total,
+      COALESCE(SUM(CASE WHEN ${LIMPO} THEN 1 ELSE 0 END),0) limpos,
+      COALESCE(SUM(CASE WHEN status='venda' THEN 1 ELSE 0 END),0) vendas,
+      COALESCE((SELECT COUNT(*) FROM interacoes WHERE lead_id IN (SELECT id FROM leads WHERE ${where})),0) interacoes
+    FROM leads WHERE ${where}`, [...args, ...args]);
+  return { total: r.total, limpos: r.limpos, trabalhados: r.total - r.limpos, vendas: r.vendas, interacoes: r.interacoes };
+}
+async function excluirLeads({ where, args, trabalhados, confirmarVendas, simular }) {
+  const c = await contarLeads(where, args);
+  const alvo = trabalhados ? c.total : c.limpos;
+  const base = { ...c, alvo };
+  if (simular) return { ...base, simulado: true };
+  if (trabalhados && c.vendas > 0 && !confirmarVendas) return { ...base, bloqueado: true };
+  if (!alvo) return { ...base, excluidos: 0, interacoes_excluidas: 0 };
+  if (trabalhados) {
+    await batch([
+      [`DELETE FROM interacoes WHERE lead_id IN (SELECT id FROM leads WHERE ${where})`, args],
+      [`DELETE FROM leads WHERE ${where}`, args]
+    ]);
+    return { ...base, excluidos: c.total, interacoes_excluidas: c.interacoes };
+  }
+  await run(`DELETE FROM leads WHERE (${where}) AND ${LIMPO}`, args);
+  return { ...base, excluidos: c.limpos, interacoes_excluidas: 0 };
+}
+const respostaExclusao = (res, r) => {
+  if (r.bloqueado) return res.status(409).json({ erro: `Há ${r.vendas} venda(s) entre os contatos. Confirme que deseja apagá-las.`, ...r });
+  res.json(r);
+};
+
+// Exclui uma lista (lote) inteira. modo: 'limpos' (só não trabalhados) ou 'tudo'.
+app.post('/api/lotes/excluir', auth(['gestor']), wrap(async (req, res) => {
+  const { lote, modo, confirmar_vendas, simular } = req.body || {};
+  const nome = String(lote || '').trim();
+  if (!nome) return res.status(400).json({ erro: 'Informe a lista' });
+  if (!['limpos', 'tudo'].includes(modo)) return res.status(400).json({ erro: 'Modo inválido' });
+  respostaExclusao(res, await excluirLeads({ where: 'lote = ?', args: [nome], trabalhados: modo === 'tudo', confirmarVendas: !!confirmar_vendas, simular: !!simular }));
+}));
+
+// Exclui contatos por ids (selecionados / contato avulso) ou por filtro (todos os resultados do filtro).
+app.post('/api/leads/excluir', auth(['gestor']), wrap(async (req, res) => {
+  const { ids, filtro, incluir_trabalhados, confirmar_vendas, simular } = req.body || {};
+  const trabalhados = !!incluir_trabalhados, confirmarVendas = !!confirmar_vendas;
+  if (Array.isArray(ids)) {
+    const lista = [...new Set(ids.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+    if (!lista.length) return res.status(400).json({ erro: 'Nenhum contato selecionado' });
+    if (lista.length > 2000) return res.status(400).json({ erro: 'Selecione no máximo 2000 contatos por vez' });
+    const partes = [];
+    for (let i = 0; i < lista.length; i += 500) partes.push(lista.slice(i, i + 500));
+    const somar = (a, b) => ({ total: a.total + b.total, limpos: a.limpos + b.limpos, trabalhados: a.trabalhados + b.trabalhados, vendas: a.vendas + b.vendas, interacoes: a.interacoes + b.interacoes, alvo: a.alvo + b.alvo });
+    const zero = { total: 0, limpos: 0, trabalhados: 0, vendas: 0, interacoes: 0, alvo: 0 };
+    let tot = zero;
+    for (const p of partes) tot = somar(tot, await excluirLeads({ where: `id IN (${inList(p.length)})`, args: p, trabalhados, simular: true }));
+    if (simular) return res.json({ ...tot, simulado: true });
+    if (trabalhados && tot.vendas > 0 && !confirmarVendas) return respostaExclusao(res, { ...tot, bloqueado: true });
+    let ex = 0, it = 0;
+    for (const p of partes) { const r = await excluirLeads({ where: `id IN (${inList(p.length)})`, args: p, trabalhados, confirmarVendas: true }); ex += r.excluidos; it += r.interacoes_excluidas; }
+    return res.json({ ...tot, excluidos: ex, interacoes_excluidas: it });
+  }
+  const f = filtro || {};
+  const cond = []; const args = [];
+  if (f.lote) { cond.push('lote = ?'); args.push(String(f.lote)); }
+  if (f.status) { cond.push('status = ?'); args.push(String(f.status)); }
+  if (f.owner === 'sem') cond.push('owner_id IS NULL');
+  else if (f.owner) { cond.push('owner_id = ?'); args.push(Number(f.owner)); }
+  if (f.q) { cond.push('(nome LIKE ? OR telefone LIKE ? OR cidade LIKE ?)'); const q = '%' + f.q + '%'; args.push(q, q, q); }
+  if (!cond.length) return res.status(400).json({ erro: 'Escolha um filtro (lista, status, SDR ou busca) ou selecione contatos' });
+  respostaExclusao(res, await excluirLeads({ where: cond.join(' AND '), args, trabalhados, confirmarVendas, simular: !!simular }));
+}));
+
 const ENCERRADOS = ['venda', 'perdido', 'invalido'];
 const RESULTADOS = {
   ligacao: ['nao_atendeu', 'caixa_postal', 'falou', 'interessado', 'proposta', 'venda', 'sem_interesse', 'invalido'],
@@ -523,7 +597,8 @@ app.get('/api/lotes', auth(), wrap(async (req, res) => {
   const rows = await all(`SELECT lote, COUNT(*) total,
       COALESCE(SUM(CASE WHEN status='novo' THEN 1 ELSE 0 END),0) novos,
       COALESCE(SUM(CASE WHEN status='venda' THEN 1 ELSE 0 END),0) vendas,
-      COALESCE(SUM(CASE WHEN status NOT IN ('novo','invalido') THEN 1 ELSE 0 END),0) trabalhados
+      COALESCE(SUM(CASE WHEN status NOT IN ('novo','invalido') THEN 1 ELSE 0 END),0) trabalhados,
+      COALESCE(SUM(CASE WHEN status='novo' AND NOT EXISTS (SELECT 1 FROM interacoes i WHERE i.lead_id = leads.id) THEN 1 ELSE 0 END),0) limpos
     FROM leads WHERE lote IS NOT NULL ${sdr ? 'AND owner_id=?' : ''} GROUP BY lote ORDER BY MAX(id) DESC`, sdr ? [req.user.id] : []);
   res.json(rows);
 }));
