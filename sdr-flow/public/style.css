@@ -184,3 +184,5 @@ details summary{cursor:pointer;padding:6px 0}
 .env-grid{display:grid;grid-template-columns:minmax(260px,340px) 1fr;gap:14px;align-items:start}
 .opts.col{flex-direction:column;gap:8px}
 @media(max-width:820px){.env-grid{grid-template-columns:1fr}}
+
+.msel{position:relative;display:inline-block}.msel summary{list-style:none;cursor:pointer}.msel summary::-webkit-details-marker{display:none}.msel-p{position:absolute;z-index:20;left:0;top:100%;margin-top:4px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:10px;box-shadow:0 8px 24px rgba(0,0,0,.14);min-width:210px}.msel-p label{display:flex;gap:8px;align-items:center;padding:5px 0;cursor:pointer;font-size:14px}.msel-p input{width:auto;margin:0}

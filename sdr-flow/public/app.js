@@ -824,6 +824,7 @@ function atvRow(a) {
 const hojeISO = () => new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
 const MOTIVOS = [['nao_atendeu', 'Não atendeu', 'N.Atend'], ['caixa_postal', 'Caixa postal', 'CxPost'], ['falou', 'Falou com o cliente', 'Falou'], ['respondeu', 'Respondeu (WhatsApp)', 'Resp'], ['enviado', 'Mensagem enviada', 'Enviada'], ['interessado', 'Interessado', 'Interes'], ['proposta', 'Proposta enviada', 'Propost'], ['venda', 'Venda fechada', 'Venda'], ['sem_interesse', 'Sem interesse', 'S.Int'], ['invalido', 'Número inválido', 'Invál']];
 S.rel = S.rel || { data: '', user: '', motivo: '', d: null };
+S.rel.sel = S.rel.sel || [];
 const REL_DEF = { resumo: true, tabgeral: true, tabsdr: true, vendas: true, interessados: true, notas: true, atrasados: false, tel: false, cab: 'Relatório SDR', rod: '' };
 function relOpts() { let o = {}; try { o = JSON.parse(localStorage.getItem('sdrflow_relopts') || '{}'); } catch (e) { /* sem storage */ } return { ...REL_DEF, ...o }; }
 function relSave(o) { try { localStorage.setItem('sdrflow_relopts', JSON.stringify(o)); } catch (e) { /* sem storage */ } }
@@ -871,10 +872,9 @@ VIEWS.relatorio = async () => {
   $('#main').innerHTML = `<div class="top"><div><h1>Relatório do dia</h1><div class="muted small">O que cada SDR fez, com as anotações</div></div></div>
   <div class="card row wrap" style="gap:8px;margin-bottom:12px"><input type="date" id="rdata" value="${S.rel.data}" max="${hojeISO()}" style="width:auto">
     <button class="btn sec sm" data-act="reldia" data-v="-1">‹ Dia anterior</button><button class="btn sec sm" data-act="reldia" data-v="0">Hoje</button>
-    <select id="ruser" style="width:auto"><option value="">Todas as SDRs</option></select></div>
+    <details id="rsdrs" class="msel"><summary id="rsum" class="btn sec sm">Todas as SDRs ▾</summary><div class="msel-p" id="rlist"></div></details></div>
   <div id="rbody"><p class="muted">Carregando…</p></div>`;
   $('#rdata').addEventListener('change', (e) => { S.rel.data = e.target.value || hojeISO(); drawRel(true); });
-  $('#ruser').addEventListener('change', (e) => { S.rel.user = e.target.value; drawRel(); });
   drawRel(true);
 };
 ACT.reldia = (t) => {
@@ -887,11 +887,30 @@ ACT.relmotivo = (t) => { S.rel.motivo = t.dataset.v; drawRel(); };
 const FUNIL = ['interessado', 'proposta', 'venda'];
 const filtraMotivo = (atv, m) => { const out = atv.filter((x) => matchMotivo(x, m)); if (!FUNIL.includes(m)) return out; const vistos = new Set(); return out.slice().sort((x, y) => y.criado_em - x.criado_em).filter((x) => !vistos.has(x.lead_id) && vistos.add(x.lead_id)).sort((x, y) => x.criado_em - y.criado_em); };
 const matchMotivo = (a, m) => !m || (m === 'nota' ? !!a.nota : m === 'ligacao' || m === 'whatsapp' ? a.canal === m : (m === 'interessado' ? ['interessado', 'proposta', 'venda'].includes(a.resultado) : a.resultado === m));
+function rsdrSum() {
+  const el = $('#rsum'); if (!el || !S.rel.d) return;
+  const n = S.rel.d.sdrs.filter((s) => S.rel.sel.map(String).includes(String(s.id))).map((s) => s.nome);
+  el.textContent = (!n.length ? 'Todas as SDRs' : n.length <= 2 ? n.join(', ') : n.length + ' SDRs') + ' ▾';
+}
+function rsdrPanel() {
+  const box = $('#rlist'); if (!box || !S.rel.d) return;
+  const sel = S.rel.sel.map(String);
+  box.innerHTML = `<div class="tiny muted" style="margin-bottom:6px">Marque as SDRs que quer ver</div>` + S.rel.d.sdrs.map((s) => `<label><input type="checkbox" data-sdr="${s.id}" ${sel.includes(String(s.id)) ? 'checked' : ''}> ${esc(s.nome)}</label>`).join('') + `<button class="btn sec sm" data-act="relsdrclr" style="margin-top:8px">Mostrar todas</button>`;
+  rsdrSum();
+}
+ACT.relsdrclr = () => { S.rel.sel = []; rsdrPanel(); drawRel(); };
+document.addEventListener('change', (e) => {
+  const id = e.target.dataset && e.target.dataset.sdr; if (!id) return;
+  const sel = S.rel.sel.map(String); const i = sel.indexOf(id);
+  if (e.target.checked && i < 0) sel.push(id); else if (!e.target.checked && i >= 0) sel.splice(i, 1);
+  S.rel.sel = sel; rsdrSum(); drawRel();
+});
 async function drawRel(fetchNew) {
   const box = $('#rbody'); if (!box) return;
-  if (fetchNew) { box.innerHTML = '<p class="muted">Carregando…</p>'; try { S.rel.d = await api('/relatorio?data=' + S.rel.data); } catch (e) { box.innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; return; } const sel = $('#ruser'); if (sel) { sel.innerHTML = '<option value="">Todas as SDRs</option>' + S.rel.d.sdrs.map((s) => `<option value="${s.id}" ${String(S.rel.user) === String(s.id) ? 'selected' : ''}>${esc(s.nome)}</option>`).join(''); } }
-  const d = S.rel.d, t = d.totais, mo = S.rel.motivo;
-  const list = d.sdrs.filter((s) => !S.rel.user || String(s.id) === String(S.rel.user));
+  if (fetchNew) { box.innerHTML = '<p class="muted">Carregando…</p>'; try { S.rel.d = await api('/relatorio?data=' + S.rel.data); } catch (e) { box.innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; return; } rsdrPanel(); }
+  const d = S.rel.d, mo = S.rel.motivo, sel = S.rel.sel.map(String);
+  const list = d.sdrs.filter((s) => !sel.length || sel.includes(String(s.id)));
+  const t = sel.length ? list.reduce((a, s) => { for (const k of ['contatos', 'ligacoes', 'atendidas', 'whatsapp', 'respostas', 'interessados', 'vendas', 'valor']) a[k] = (a[k] || 0) + (s[k] || 0); return a; }, {}) : d.totais;
   const cnt = (m) => list.reduce((a, s) => a + filtraMotivo(s.atividades, m).length, 0);
   const chips = [['', 'Todos'], ...MOTIVOS.filter((m) => cnt(m[0])).map((m) => [m[0], m[0] === 'interessado' ? 'Interessados (c/ proposta e venda)' : m[1]]), ['nota', 'Com anotação']];
   const fchips = `<div class="chips">${chips.map((c) => `<button class="fchip ${mo === c[0] ? 'on' : ''}" data-act="relmotivo" data-v="${c[0]}">${esc(c[1])} <b>${cnt(c[0])}</b></button>`).join('')}</div>`;
