@@ -884,20 +884,22 @@ ACT.reldia = (t) => {
   $('#rdata').value = S.rel.data; drawRel(true);
 };
 ACT.relmotivo = (t) => { S.rel.motivo = t.dataset.v; drawRel(); };
+const FUNIL = ['interessado', 'proposta', 'venda'];
+const filtraMotivo = (atv, m) => { const out = atv.filter((x) => matchMotivo(x, m)); if (!FUNIL.includes(m)) return out; const vistos = new Set(); return out.slice().sort((x, y) => y.criado_em - x.criado_em).filter((x) => !vistos.has(x.lead_id) && vistos.add(x.lead_id)).sort((x, y) => x.criado_em - y.criado_em); };
 const matchMotivo = (a, m) => !m || (m === 'nota' ? !!a.nota : m === 'ligacao' || m === 'whatsapp' ? a.canal === m : (m === 'interessado' ? ['interessado', 'proposta', 'venda'].includes(a.resultado) : a.resultado === m));
 async function drawRel(fetchNew) {
   const box = $('#rbody'); if (!box) return;
   if (fetchNew) { box.innerHTML = '<p class="muted">Carregando…</p>'; try { S.rel.d = await api('/relatorio?data=' + S.rel.data); } catch (e) { box.innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; return; } const sel = $('#ruser'); if (sel) { sel.innerHTML = '<option value="">Todas as SDRs</option>' + S.rel.d.sdrs.map((s) => `<option value="${s.id}" ${String(S.rel.user) === String(s.id) ? 'selected' : ''}>${esc(s.nome)}</option>`).join(''); } }
   const d = S.rel.d, t = d.totais, mo = S.rel.motivo;
   const list = d.sdrs.filter((s) => !S.rel.user || String(s.id) === String(S.rel.user));
-  const cnt = (m) => list.reduce((a, s) => a + s.atividades.filter((x) => matchMotivo(x, m)).length, 0);
+  const cnt = (m) => list.reduce((a, s) => a + filtraMotivo(s.atividades, m).length, 0);
   const chips = [['', 'Todos'], ...MOTIVOS.filter((m) => cnt(m[0])).map((m) => [m[0], m[0] === 'interessado' ? 'Interessados (c/ proposta e venda)' : m[1]]), ['nota', 'Com anotação']];
   const fchips = `<div class="chips">${chips.map((c) => `<button class="fchip ${mo === c[0] ? 'on' : ''}" data-act="relmotivo" data-v="${c[0]}">${esc(c[1])} <b>${cnt(c[0])}</b></button>`).join('')}</div>`;
   const card = (s) => {
-    const fil = s.atividades.filter((a) => matchMotivo(a, mo)).slice().reverse();
+    const fil = filtraMotivo(s.atividades, mo).slice().reverse();
     return `<div class="card sdr-card" style="margin-top:12px"><div class="row sp"><div><b>${esc(s.nome)}</b><div class="tiny muted">${s.atividades.length ? `Das ${s.primeira || '—'} às ${s.ultima || '—'} · ${s.contatos} contatos` : 'Sem atividade neste dia'}</div></div>${s.atrasados ? `<span class="chip bad">${s.atrasados} atrasados</span>` : ''}</div>
     <div class="nums"><div><b>${num(s.ligacoes)}</b><span>ligações</span></div><div><b>${num(s.whatsapp)}</b><span>WhatsApp</span></div><div><b>${num(s.interessados)}</b><span>interessados</span></div><div><b>${num(s.vendas)}</b><span>vendas</span></div></div>
-    ${mo ? (fil.length ? `<div class="sec-title">${fil.length} atividade${fil.length === 1 ? '' : 's'} no filtro</div>${fil.map((a) => atvRow({ ...a, sdr_nome: s.nome })).join('')}` : '<p class="muted small" style="margin-top:10px">Nada neste filtro.</p>')
+    ${mo ? (fil.length ? `<div class="sec-title">${fil.length} ${FUNIL.includes(mo) ? 'contato' : 'atividade'}${fil.length === 1 ? '' : 's'} no filtro</div>${fil.map((a) => atvRow({ ...a, sdr_nome: s.nome })).join('')}` : '<p class="muted small" style="margin-top:10px">Nada neste filtro.</p>')
     : `${s.vendas_lista.length ? `<div class="sec-title">Vendas</div>${s.vendas_lista.map((a) => atvRow({ ...a, sdr_nome: s.nome })).join('')}` : ''}
     ${s.atividades.length ? `<details style="margin-top:10px"><summary class="small"><b>Todas as atividades (${s.atividades.length})</b></summary>${fil.map((a) => atvRow({ ...a, sdr_nome: s.nome })).join('')}</details>` : ''}`}</div>`;
   };
