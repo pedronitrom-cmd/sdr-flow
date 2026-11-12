@@ -699,6 +699,39 @@ app.get('/api/relatorio', auth(['gestor']), wrap(async (req, res) => {
   res.json({ data: d0, titulo: `${SEMANA[dow]}, ${ddmm(d0)}/${new Date(d0 + TZ_OFFSET).getUTCFullYear()}`, totais, sdrs, texto: L.join('\n').trim() });
 }));
 
+/* ---------- editar atividade (gestor) ---------- */
+app.put('/api/interacoes/:id', auth(['gestor']), wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const it = await get('SELECT * FROM interacoes WHERE id=?', [id]);
+  if (!it) return res.status(404).json({ erro: 'Atividade não encontrada' });
+  const { resultado, nota, valor } = req.body || {};
+  const novoRes = resultado === undefined ? it.resultado : String(resultado);
+  if (!RESULTADOS[it.canal] || !RESULTADOS[it.canal].includes(novoRes)) return res.status(400).json({ erro: 'Motivo inválido para este canal' });
+  const novaNota = nota === undefined ? it.nota : (String(nota).trim() || null);
+  const novoValor = novoRes === 'venda' ? (valor === undefined ? it.valor : (valor === null || valor === '' ? null : Number(valor))) : null;
+  if (novoValor !== null && !Number.isFinite(novoValor)) return res.status(400).json({ erro: 'Valor inválido' });
+  const stmts = [[`UPDATE interacoes SET resultado=?, nota=?, valor=? WHERE id=?`, [novoRes, novaNota, novoValor, id]]];
+  let leadStatus = null;
+  if (it.canal !== 'nota') {
+    const lead = await get('SELECT * FROM leads WHERE id=?', [it.lead_id]);
+    const ult = await get(`SELECT id FROM interacoes WHERE lead_id=? AND canal!='nota' ORDER BY criado_em DESC, id DESC LIMIT 1`, [it.lead_id]);
+    if (lead && ult && ult.id === id) {
+      const MAP = { nao_atendeu: 'novo', caixa_postal: 'novo', enviado: 'abordado', falou: 'conversando', respondeu: 'conversando', interessado: 'interessado', proposta: 'proposta', venda: 'venda', sem_interesse: 'perdido', invalido: 'invalido' };
+      const cfg = await getConfig();
+      const h = (x) => Math.max(1, parseFloat(x) || 24) * 3600 * 1000;
+      const cad = { nao_atendeu: cfg.cadencia_nao_atendeu_h, caixa_postal: cfg.cadencia_nao_atendeu_h, enviado: cfg.cadencia_enviado_h, falou: cfg.cadencia_conversa_h, respondeu: cfg.cadencia_conversa_h, interessado: cfg.cadencia_conversa_h, proposta: cfg.cadencia_proposta_h };
+      leadStatus = MAP[novoRes];
+      let fu = lead.followup_em;
+      if (ENCERRADOS.includes(leadStatus)) fu = null;
+      else if (leadStatus !== lead.status || fu === null) fu = now() + h(cad[novoRes]);
+      const vv = leadStatus === 'venda' ? (novoValor ?? lead.valor_venda ?? null) : null;
+      stmts.push([`UPDATE leads SET status=?, followup_em=?, valor_venda=? WHERE id=?`, [leadStatus, fu ?? null, vv, lead.id]]);
+    }
+  }
+  await batch(stmts);
+  res.json({ ok: true, resultado: novoRes, status: leadStatus });
+}));
+
 app.get('/api/export.csv', auth(['gestor']), wrap(async (req, res) => {
   const [ini, fim] = rangeFor(req.query.periodo || '30d');
   const rows = await all(`SELECT i.criado_em, u.nome sdr, l.nome cliente, l.telefone, l.cidade, i.canal, i.resultado, i.origem, i.valor, i.nota
