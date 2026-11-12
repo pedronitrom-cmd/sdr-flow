@@ -623,6 +623,82 @@ app.delete('/api/mensagens/:id', auth(['gestor']), wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+/* ---------- atividades e relatório do dia (gestor) ---------- */
+const parseDia = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || '')); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) - TZ_OFFSET : null; };
+const hhmm = (ms) => new Date(ms + TZ_OFFSET).toISOString().slice(11, 16);
+const ddmm = (ms) => { const d = new Date(ms + TZ_OFFSET).toISOString(); return d.slice(8, 10) + '/' + d.slice(5, 7); };
+const SEMANA = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado'];
+const RES_TXT = { nao_atendeu: 'Não atendeu', caixa_postal: 'Caixa postal', falou: 'Falou com o cliente', interessado: 'Interessado', proposta: 'Proposta enviada', venda: 'Venda fechada', sem_interesse: 'Sem interesse', invalido: 'Número inválido', enviado: 'Mensagem enviada', respondeu: 'Respondeu', nota: 'Anotação' };
+const CANAL_TXT = { ligacao: 'Ligação', whatsapp: 'WhatsApp', nota: 'Nota' };
+const brl = (n) => 'R$ ' + Math.round(n || 0).toLocaleString('pt-BR');
+const ATV_COLS = `i.id, i.criado_em, i.canal, i.resultado, i.origem, i.valor, i.nota, i.user_id sdr_id, u.nome sdr_nome,
+  l.id lead_id, l.nome, l.empresa, l.telefone, l.cidade, l.consumo, l.status, l.valor_venda`;
+
+app.get('/api/atividades', auth(['gestor']), wrap(async (req, res) => {
+  const q = req.query;
+  const d0 = parseDia(q.de), d1 = parseDia(q.ate);
+  const [ini, fim] = d0 != null ? [d0, (d1 != null ? d1 : d0) + DAY - 1] : rangeFor(q.periodo || 'hoje');
+  const cond = ['i.criado_em>=?', 'i.criado_em<=?']; const args = [ini, fim];
+  if (q.user) { cond.push('i.user_id=?'); args.push(Number(q.user)); }
+  if (q.resultado) { cond.push('i.resultado=?'); args.push(String(q.resultado)); }
+  if (q.canal) { cond.push('i.canal=?'); args.push(String(q.canal)); }
+  if (q.so_notas === '1') cond.push(`COALESCE(i.nota,'')<>''`);
+  if (q.q) { const s = '%' + q.q + '%'; cond.push('(l.nome LIKE ? OR l.telefone LIKE ? OR l.empresa LIKE ? OR l.cidade LIKE ? OR i.nota LIKE ?)'); args.push(s, s, s, s, s); }
+  const w = cond.join(' AND ');
+  const base = `FROM interacoes i JOIN users u ON u.id=i.user_id JOIN leads l ON l.id=i.lead_id WHERE ${w}`;
+  const [tot, itens] = await Promise.all([
+    get(`SELECT COUNT(*) c ${base}`, args),
+    all(`SELECT ${ATV_COLS} ${base} ORDER BY i.criado_em DESC LIMIT ? OFFSET ?`, [...args, Math.min(Number(q.limit) || 50, 200), Number(q.offset) || 0])
+  ]);
+  res.json({ total: tot.c, itens });
+}));
+
+app.get('/api/relatorio', auth(['gestor']), wrap(async (req, res) => {
+  const d0 = parseDia(req.query.data) ?? startOfDay(now());
+  const d1 = d0 + DAY - 1;
+  const [users, rows, atras] = await Promise.all([
+    all(`SELECT id, nome, meta_ligacoes, meta_whatsapp FROM users WHERE papel='sdr' AND ativo=1 ORDER BY nome`),
+    all(`SELECT ${ATV_COLS} FROM interacoes i JOIN users u ON u.id=i.user_id JOIN leads l ON l.id=i.lead_id WHERE i.criado_em>=? AND i.criado_em<=? ORDER BY i.criado_em`, [d0, d1]),
+    all(`SELECT owner_id, COUNT(*) c FROM leads WHERE owner_id IS NOT NULL AND status NOT IN ('venda','perdido','invalido') AND followup_em IS NOT NULL AND followup_em < ? GROUP BY owner_id`, [d1 + 1])
+  ]);
+  for (const r of rows) if (!users.find((u) => u.id === r.sdr_id)) users.push({ id: r.sdr_id, nome: r.sdr_nome, meta_ligacoes: 0, meta_whatsapp: 0 });
+  const slim = (r) => ({ id: r.id, hora: hhmm(r.criado_em), criado_em: r.criado_em, canal: r.canal, resultado: r.resultado, origem: r.origem, valor: r.valor, nota: r.nota, lead_id: r.lead_id, nome: r.nome, empresa: r.empresa, telefone: r.telefone, cidade: r.cidade, status: r.status });
+  const sdrs = users.map((u) => {
+    const mine = rows.filter((r) => r.sdr_id === u.id);
+    const work = mine.filter((r) => r.canal !== 'nota');
+    const stats = calcStats(work);
+    return {
+      id: u.id, nome: u.nome, meta_ligacoes: u.meta_ligacoes, meta_whatsapp: u.meta_whatsapp, ...stats,
+      contatos: new Set(work.map((r) => r.lead_id)).size,
+      primeira: work.length ? hhmm(work[0].criado_em) : null, ultima: work.length ? hhmm(work[work.length - 1].criado_em) : null,
+      atrasados: (atras.find((a) => a.owner_id === u.id) || { c: 0 }).c,
+      vendas_lista: mine.filter((r) => r.resultado === 'venda').map(slim),
+      interessados_lista: mine.filter((r) => ['interessado', 'proposta'].includes(r.resultado)).map(slim),
+      atividades: mine.map(slim)
+    };
+  }).filter((s) => s.atividades.length || users.length);
+  const totais = calcStats(rows.filter((r) => r.canal !== 'nota'));
+  totais.contatos = new Set(rows.filter((r) => r.canal !== 'nota').map((r) => r.lead_id)).size;
+
+  const dow = new Date(d0 + TZ_OFFSET).getUTCDay();
+  const L = [];
+  L.push(`*Relatório SDR – ${SEMANA[dow]}, ${ddmm(d0)}/${new Date(d0 + TZ_OFFSET).getUTCFullYear()}*`, '');
+  L.push(`*Total da equipe*`, `• Contatos trabalhados: ${totais.contatos}`, `• Ligações: ${totais.ligacoes} (${totais.atendidas} atendidas)`, `• WhatsApp enviados: ${totais.whatsapp} (${totais.respostas} respostas)`, `• Interessados: ${totais.interessados} · Propostas: ${totais.propostas}`, `• Vendas: ${totais.vendas}${totais.valor ? ' – ' + brl(totais.valor) : ''}`, '');
+  const fmtL = (r) => `${r.nome}${r.empresa ? ' (' + r.empresa + ')' : ''}${r.cidade ? ' – ' + r.cidade : ''}`;
+  for (const s of sdrs) {
+    L.push(`*${s.nome}*`);
+    if (!s.atividades.length) { L.push('• Sem atividade registrada', ''); continue; }
+    L.push(`• ${s.ligacoes} ligações (${s.atendidas} atendidas) · ${s.whatsapp} WhatsApp (${s.respostas} respostas) · ${s.contatos} contatos`);
+    L.push(`• Atividade das ${s.primeira || '—'} às ${s.ultima || '—'}${s.atrasados ? ` · ${s.atrasados} retornos atrasados` : ''}`);
+    if (s.vendas_lista.length) { L.push('• *Vendas:*'); for (const v of s.vendas_lista) L.push(`   – ${fmtL(v)}${v.valor ? ' – ' + brl(v.valor) : ''}${v.nota ? ' – “' + v.nota + '”' : ''}`); }
+    if (s.interessados_lista.length) { L.push('• *Interessados/propostas:*'); for (const v of s.interessados_lista) L.push(`   – ${fmtL(v)} – ${RES_TXT[v.resultado]}${v.nota ? ' – “' + v.nota + '”' : ''}`); }
+    const notas = s.atividades.filter((a) => a.nota && !['venda', 'interessado', 'proposta'].includes(a.resultado));
+    if (notas.length) { L.push('• *Anotações:*'); for (const v of notas) L.push(`   – ${v.hora} ${v.nome}: “${v.nota}”`); }
+    L.push('');
+  }
+  res.json({ data: d0, titulo: `${SEMANA[dow]}, ${ddmm(d0)}/${new Date(d0 + TZ_OFFSET).getUTCFullYear()}`, totais, sdrs, texto: L.join('\n').trim() });
+}));
+
 app.get('/api/export.csv', auth(['gestor']), wrap(async (req, res) => {
   const [ini, fim] = rangeFor(req.query.periodo || '30d');
   const rows = await all(`SELECT i.criado_em, u.nome sdr, l.nome cliente, l.telefone, l.cidade, i.canal, i.resultado, i.origem, i.valor, i.nota
