@@ -223,21 +223,62 @@ app.post('/api/usuarios', auth(['gestor']), wrap(async (req, res) => {
   });
   res.json({ id });
 }));
+const gestoresAtivos = async (exceto) => (await get(`SELECT COUNT(*) AS n FROM users WHERE papel='gestor' AND ativo=1 AND id<>?`, [exceto || 0])).n;
 app.put('/api/usuarios/:id', auth(['gestor']), wrap(async (req, res) => {
   const id = parseInt(req.params.id);
   const u = await get('SELECT * FROM users WHERE id=?', [id]);
   if (!u) return res.status(404).json({ erro: 'Não encontrado' });
-  const { nome, meta_ligacoes, meta_whatsapp, ativo, senha } = req.body || {};
-  if (id === req.user.id && ativo === 0) return res.status(400).json({ erro: 'Você não pode desativar o seu próprio usuário' });
-  if (senha && String(senha).length < 6) return res.status(400).json({ erro: 'Senha com pelo menos 6 caracteres' });
-  await run('UPDATE users SET nome=?, meta_ligacoes=?, meta_whatsapp=?, ativo=? WHERE id=?', [
-    nome ?? u.nome, parseInt(meta_ligacoes) || u.meta_ligacoes, parseInt(meta_whatsapp) || u.meta_whatsapp,
-    ativo === undefined ? u.ativo : (ativo ? 1 : 0), id
+  const b = req.body || {};
+  const eu = id === req.user.id;
+  const nome = b.nome === undefined ? u.nome : String(b.nome).trim();
+  if (!nome) return res.status(400).json({ erro: 'Informe o nome' });
+  const usuario = b.usuario === undefined ? u.usuario : String(b.usuario).toLowerCase().trim();
+  if (!usuario || /\s/.test(usuario)) return res.status(400).json({ erro: 'Usuário sem espaços e não pode ficar vazio' });
+  if (usuario !== u.usuario && await get('SELECT id FROM users WHERE usuario=? AND id<>?', [usuario, id])) return res.status(400).json({ erro: 'Esse usuário já existe' });
+  const papel = b.papel === undefined ? u.papel : (b.papel === 'gestor' ? 'gestor' : 'sdr');
+  const ativo = b.ativo === undefined ? u.ativo : (b.ativo ? 1 : 0);
+  if (eu && !ativo) return res.status(400).json({ erro: 'Você não pode desativar o seu próprio usuário' });
+  if (eu && papel !== u.papel) return res.status(400).json({ erro: 'Você não pode mudar o seu próprio perfil' });
+  if (u.papel === 'gestor' && u.ativo && (papel !== 'gestor' || !ativo) && !(await gestoresAtivos(id))) return res.status(400).json({ erro: 'Precisa existir pelo menos um gestor ativo' });
+  if (b.senha && String(b.senha).length < 6) return res.status(400).json({ erro: 'Senha com pelo menos 6 caracteres' });
+  await run('UPDATE users SET nome=?, usuario=?, papel=?, meta_ligacoes=?, meta_whatsapp=?, ativo=? WHERE id=?', [
+    nome, usuario, papel, parseInt(b.meta_ligacoes) || u.meta_ligacoes, parseInt(b.meta_whatsapp) || u.meta_whatsapp, ativo, id
   ]);
-  if (senha) {
+  if (b.senha) {
     const salt = crypto.randomBytes(16).toString('hex');
-    await run('UPDATE users SET salt=?, hash=?, trocar_senha=1 WHERE id=?', [salt, hashPwd(senha, salt), id]);
+    await run('UPDATE users SET salt=?, hash=?, trocar_senha=? WHERE id=?', [salt, hashPwd(b.senha, salt), b.trocar_senha === false || b.trocar_senha === 0 ? 0 : 1, id]);
   }
+  if (!eu && (b.senha || !ativo || usuario !== u.usuario || papel !== u.papel)) await run('DELETE FROM sessions WHERE user_id=?', [id]);
+  res.json({ ok: true });
+}));
+app.get('/api/usuarios/:id/uso', auth(['gestor']), wrap(async (req, res) => {
+  const id = parseInt(req.params.id);
+  res.json({
+    leads: (await get('SELECT COUNT(*) AS n FROM leads WHERE owner_id=?', [id])).n,
+    interacoes: (await get('SELECT COUNT(*) AS n FROM interacoes WHERE user_id=?', [id])).n
+  });
+}));
+app.delete('/api/usuarios/:id', auth(['gestor']), wrap(async (req, res) => {
+  const id = parseInt(req.params.id);
+  const u = await get('SELECT * FROM users WHERE id=?', [id]);
+  if (!u) return res.status(404).json({ erro: 'Não encontrado' });
+  if (id === req.user.id) return res.status(400).json({ erro: 'Você não pode excluir o seu próprio usuário' });
+  if (u.papel === 'gestor' && u.ativo && !(await gestoresAtivos(id))) return res.status(400).json({ erro: 'Precisa existir pelo menos um gestor ativo' });
+  const q = req.query || {};
+  const n = (await get('SELECT COUNT(*) AS n FROM interacoes WHERE user_id=?', [id])).n;
+  if (n && q.apagar_historico !== '1') return res.status(409).json({ erro: `${u.nome} tem ${n} atividades no histórico. Confirme que quer apagá-las ou use Inativar.` });
+  let destino = null;
+  if (q.leads && q.leads !== 'liberar') {
+    destino = parseInt(q.leads);
+    const d = await get('SELECT id FROM users WHERE id=? AND ativo=1 AND id<>?', [destino, id]);
+    if (!d) return res.status(400).json({ erro: 'Destino dos contatos inválido' });
+  }
+  await batch([
+    ['DELETE FROM sessions WHERE user_id=?', [id]],
+    ['UPDATE leads SET owner_id=? WHERE owner_id=?', [destino, id]],
+    ['DELETE FROM interacoes WHERE user_id=?', [id]],
+    ['DELETE FROM users WHERE id=?', [id]]
+  ]);
   res.json({ ok: true });
 }));
 
