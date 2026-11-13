@@ -872,9 +872,11 @@ VIEWS.relatorio = async () => {
   $('#main').innerHTML = `<div class="top"><div><h1>Relatório do dia</h1><div class="muted small">O que cada SDR fez, com as anotações</div></div></div>
   <div class="card row wrap" style="gap:8px;margin-bottom:12px"><input type="date" id="rdata" value="${S.rel.data}" max="${hojeISO()}" style="width:auto">
     <button class="btn sec sm" data-act="reldia" data-v="-1">‹ Dia anterior</button><button class="btn sec sm" data-act="reldia" data-v="0">Hoje</button>
-    <details id="rsdrs" class="msel"><summary id="rsum" class="btn sec sm">Todas as SDRs ▾</summary><div class="msel-p" id="rlist"></div></details></div>
+    <details id="rsdrs" class="msel"><summary id="rsum" class="btn sec sm">Todas as SDRs ▾</summary><div class="msel-p" id="rlist"></div></details>
+    <select id="rlote" style="width:auto;max-width:260px"><option value="">Todas as listas</option></select></div>
   <div id="rbody"><p class="muted">Carregando…</p></div>`;
   $('#rdata').addEventListener('change', (e) => { S.rel.data = e.target.value || hojeISO(); drawRel(true); });
+  $('#rlote').addEventListener('change', (e) => { S.rel.lote = e.target.value; drawRel(); });
   drawRel(true);
 };
 ACT.reldia = (t) => {
@@ -908,18 +910,53 @@ document.addEventListener('change', (e) => {
   if (e.target.checked && i < 0) sel.push(id); else if (!e.target.checked && i >= 0) sel.splice(i, 1);
   S.rel.sel = sel; rsdrSum(); drawRel();
 });
+const loteKey = (a) => a.lote || '__none';
+const loteNome = (k) => (k === '__none' ? 'Sem lista' : k);
+function cliStats(work) {
+  const s = { ligacoes: 0, atendidas: 0, whatsapp: 0, respostas: 0, interessados: 0, propostas: 0, vendas: 0, valor: 0, contatos: new Set(work.map((r) => r.lead_id)).size };
+  const vi = new Set(), vp = new Set(), vv = new Set();
+  for (const r of work) {
+    if (r.canal === 'ligacao') { s.ligacoes++; if (!['nao_atendeu', 'caixa_postal', 'invalido'].includes(r.resultado)) s.atendidas++; }
+    else if (r.canal === 'whatsapp') { if (r.resultado === 'enviado') s.whatsapp++; }
+    if (['falou', 'respondeu', 'interessado', 'proposta', 'venda'].includes(r.resultado) && r.canal === 'whatsapp') s.respostas++;
+    if (['interessado', 'proposta', 'venda'].includes(r.resultado)) vi.add(r.lead_id);
+    if (['proposta', 'venda'].includes(r.resultado)) vp.add(r.lead_id);
+    if (r.resultado === 'venda') { vv.add(r.lead_id); s.valor += r.valor || 0; }
+  }
+  s.interessados = vi.size; s.propostas = vp.size; s.vendas = vv.size;
+  return s;
+}
+function viewLote(s, lo) {
+  const f = (arr) => arr.filter((a) => loteKey(a) === lo);
+  const atv = f(s.atividades), work = atv.filter((a) => a.canal !== 'nota');
+  return { ...s, ...cliStats(work), atividades: atv, vendas_lista: f(s.vendas_lista), interessados_lista: f(s.interessados_lista), primeira: work.length ? work[0].hora : null, ultima: work.length ? work[work.length - 1].hora : null };
+}
+function listasLinha(s) {
+  const m = new Map();
+  for (const a of s.atividades) if (a.canal !== 'nota') { const k = loteKey(a); if (!m.has(k)) m.set(k, new Set()); m.get(k).add(a.lead_id); }
+  if (!m.size) return '';
+  return `<div class="tiny" style="margin:2px 0 8px">Listas: ${[...m.entries()].sort((x, y) => y[1].size - x[1].size).map(([k, v]) => `<b>${esc(loteNome(k))}</b> (${v.size})`).join(' · ')}</div>`;
+}
+function rloteFill() {
+  const sel = $('#rlote'); if (!sel || !S.rel.d) return;
+  const m = new Map();
+  for (const s of S.rel.d.sdrs) for (const a of s.atividades) if (a.canal !== 'nota') { const k = loteKey(a); if (!m.has(k)) m.set(k, new Set()); m.get(k).add(a.lead_id); }
+  if (S.rel.lote && !m.has(S.rel.lote)) S.rel.lote = '';
+  sel.innerHTML = '<option value="">Todas as listas</option>' + [...m.entries()].sort((x, y) => y[1].size - x[1].size).map(([k, v]) => `<option value="${esc(k)}" ${S.rel.lote === k ? 'selected' : ''}>${esc(loteNome(k))} (${v.size} contato${v.size === 1 ? "" : "s"})</option>`).join('');
+}
 async function drawRel(fetchNew) {
   const box = $('#rbody'); if (!box) return;
-  if (fetchNew) { box.innerHTML = '<p class="muted">Carregando…</p>'; try { S.rel.d = await api('/relatorio?data=' + S.rel.data); } catch (e) { box.innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; return; } rsdrPanel(); }
-  const d = S.rel.d, mo = S.rel.motivo, sel = S.rel.sel.map(String);
-  const list = d.sdrs.filter((s) => !sel.length || sel.includes(String(s.id)));
-  const t = sel.length ? list.reduce((a, s) => { for (const k of ['contatos', 'ligacoes', 'atendidas', 'whatsapp', 'respostas', 'interessados', 'vendas', 'valor']) a[k] = (a[k] || 0) + (s[k] || 0); return a; }, {}) : d.totais;
+  if (fetchNew) { box.innerHTML = '<p class="muted">Carregando…</p>'; try { S.rel.d = await api('/relatorio?data=' + S.rel.data); } catch (e) { box.innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; return; } rsdrPanel(); rloteFill(); }
+  const d = S.rel.d, mo = S.rel.motivo, sel = S.rel.sel.map(String), lo = S.rel.lote || '';
+  const base = d.sdrs.filter((s) => !sel.length || sel.includes(String(s.id)));
+  const list = lo ? base.map((s) => viewLote(s, lo)) : base;
+  const t = (sel.length || lo) ? list.reduce((a, s) => { for (const k of ['contatos', 'ligacoes', 'atendidas', 'whatsapp', 'respostas', 'interessados', 'vendas', 'valor']) a[k] = (a[k] || 0) + (s[k] || 0); return a; }, {}) : d.totais;
   const cnt = (m) => list.reduce((a, s) => a + filtraMotivo(s.atividades, m).length, 0);
   const chips = [['', 'Todos'], ...MOTIVOS.filter((m) => cnt(m[0])).map((m) => [m[0], m[0] === 'interessado' ? 'Interessados (c/ proposta e venda)' : m[1]]), ['nota', 'Com anotação']];
   const fchips = `<div class="chips">${chips.map((c) => `<button class="fchip ${mo === c[0] ? 'on' : ''}" data-act="relmotivo" data-v="${c[0]}">${esc(c[1])} <b>${cnt(c[0])}</b></button>`).join('')}</div>`;
   const card = (s) => {
     const fil = filtraMotivo(s.atividades, mo).slice().reverse();
-    return `<div class="card sdr-card" style="margin-top:12px"><div class="row sp"><div><b>${esc(s.nome)}</b><div class="tiny muted">${s.atividades.length ? `Das ${s.primeira || '—'} às ${s.ultima || '—'} · ${s.contatos} contatos` : 'Sem atividade neste dia'}</div></div>${s.atrasados ? `<span class="chip bad">${s.atrasados} atrasados</span>` : ''}</div>
+    return `<div class="card sdr-card" style="margin-top:12px"><div class="row sp"><div><b>${esc(s.nome)}</b><div class="tiny muted">${s.atividades.length ? `Das ${s.primeira || '—'} às ${s.ultima || '—'} · ${s.contatos} contatos` : 'Sem atividade neste dia'}</div>${lo ? '' : listasLinha(s)}</div>${s.atrasados ? `<span class="chip bad">${s.atrasados} atrasados</span>` : ''}</div>
     <div class="nums"><div><b>${num(s.ligacoes)}</b><span>ligações</span></div><div><b>${num(s.whatsapp)}</b><span>WhatsApp</span></div><div><b>${num(s.interessados)}</b><span>interessados</span></div><div><b>${num(s.vendas)}</b><span>vendas</span></div></div>
     ${mo ? (fil.length ? `<div class="sec-title">${fil.length} ${FUNIL.includes(mo) ? 'contato' : 'atividade'}${fil.length === 1 ? '' : 's'} no filtro</div>${fil.map((a) => atvRow({ ...a, sdr_nome: s.nome })).join('')}` : '<p class="muted small" style="margin-top:10px">Nada neste filtro.</p>')
     : `${s.vendas_lista.length ? `<div class="sec-title">Vendas</div>${s.vendas_lista.map((a) => atvRow({ ...a, sdr_nome: s.nome })).join('')}` : ''}
@@ -930,7 +967,7 @@ async function drawRel(fetchNew) {
     <div class="kpi"><div class="l">Ligações</div><div class="v">${num(t.ligacoes)}</div><div class="s">${num(t.atendidas)} atendidas</div></div>
     <div class="kpi"><div class="l">WhatsApp</div><div class="v">${num(t.whatsapp)}</div><div class="s">${num(t.respostas)} respostas</div></div>
     <div class="kpi hl"><div class="l">Vendas</div><div class="v">${num(t.vendas)}</div><div class="s">${money(t.valor)} · ${num(t.interessados)} interessados</div></div></div>
-  <div class="sec-title">Filtrar por motivo</div>${fchips}
+  ${lo ? `<div class="alert" style="margin-bottom:8px">Mostrando só a lista <b>${esc(loteNome(lo))}</b>.</div>` : ''}<div class="sec-title">Filtrar por motivo</div>${fchips}
   ${list.map(card).join('') || '<p class="muted">Nenhuma SDR cadastrada.</p>'}`;
 }
 document.addEventListener('change', (e) => {
