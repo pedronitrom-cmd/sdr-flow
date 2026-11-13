@@ -895,9 +895,12 @@ function rsdrSum() {
 function rsdrPanel() {
   const box = $('#rlist'); if (!box || !S.rel.d) return;
   const sel = S.rel.sel.map(String);
-  box.innerHTML = `<div class="tiny muted" style="margin-bottom:6px">Marque as SDRs que quer ver</div>` + S.rel.d.sdrs.map((s) => `<label><input type="checkbox" data-sdr="${s.id}" ${sel.includes(String(s.id)) ? 'checked' : ''}> ${esc(s.nome)}</label>`).join('') + `<button class="btn sec sm" data-act="relsdrclr" style="margin-top:8px">Mostrar todas</button>`;
+  box.innerHTML = `<div class="tiny muted" style="margin-bottom:6px">Marque as SDRs que quer ver</div>` + S.rel.d.sdrs.map((s) => `<label><input type="checkbox" data-sdr="${s.id}" ${sel.includes(String(s.id)) ? 'checked' : ''}> ${esc(s.nome)}</label>`).join('') + `<div class="row" style="gap:6px;margin-top:8px"><button class="btn sec sm" data-act="relsdrclr">Mostrar todas</button><button class="btn sm" data-act="rsdrok">Pronto</button></div>`;
   rsdrSum();
 }
+ACT.rsdrok = () => { const d = $('#rsdrs'); if (d) d.removeAttribute('open'); };
+document.addEventListener('click', (e) => { const d = $('#rsdrs'); if (d && d.open && !e.target.closest('#rsdrs')) d.removeAttribute('open'); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { const d = $('#rsdrs'); if (d) d.removeAttribute('open'); } });
 ACT.relsdrclr = () => { S.rel.sel = []; rsdrPanel(); drawRel(); };
 document.addEventListener('change', (e) => {
   const id = e.target.dataset && e.target.dataset.sdr; if (!id) return;
@@ -940,7 +943,7 @@ document.addEventListener('input', (e) => {
 });
 function regenMsg() {
   const d = S.env.d, ta = $('#rmsg'); if (!d || !ta) return;
-  const list = d.sdrs.filter((s) => !S.env.user || String(s.id) === String(S.env.user));
+  const sl = S.env.sel.map(String), list = d.sdrs.filter((s) => !sl.length || sl.includes(String(s.id)));
   ta.value = buildMsg(d, relOpts(), list);
 }
 ACT.relregen = () => { regenMsg(); toast('Texto refeito'); };
@@ -950,6 +953,28 @@ ACT.relprint = () => { document.querySelectorAll('#rbody details').forEach((x) =
 
 /* ---------- enviar relatório (gestor) ---------- */
 S.env = S.env || { data: '', user: '', d: null };
+S.env.sel = S.env.sel || [];
+function esdrSum() {
+  const el = $('#esum'); if (!el || !S.env.d) return;
+  const n = S.env.d.sdrs.filter((s) => S.env.sel.map(String).includes(String(s.id))).map((s) => s.nome);
+  el.textContent = (!n.length ? 'Todas as SDRs' : n.length <= 2 ? n.join(', ') : n.length + ' SDRs') + ' ▾';
+}
+function esdrPanel() {
+  const box = $('#elist'); if (!box || !S.env.d) return;
+  const sel = S.env.sel.map(String);
+  box.innerHTML = `<div class="tiny muted" style="margin-bottom:6px">Marque as SDRs que entram na mensagem</div>` + S.env.d.sdrs.map((s) => `<label><input type="checkbox" data-esdr="${s.id}" ${sel.includes(String(s.id)) ? 'checked' : ''}> ${esc(s.nome)}</label>`).join('') + `<div class="row" style="gap:6px;margin-top:8px"><button class="btn sec sm" data-act="esdrclr">Mostrar todas</button><button class="btn sm" data-act="esdrok">Pronto</button></div>`;
+  esdrSum();
+}
+ACT.esdrok = () => { const d = $('#esdrs'); if (d) d.removeAttribute('open'); };
+ACT.esdrclr = () => { S.env.sel = []; esdrPanel(); regenMsg(); };
+document.addEventListener('click', (e) => { const d = $('#esdrs'); if (d && d.open && !e.target.closest('#esdrs')) d.removeAttribute('open'); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { const d = $('#esdrs'); if (d) d.removeAttribute('open'); } });
+document.addEventListener('change', (e) => {
+  const id = e.target.dataset && e.target.dataset.esdr; if (!id) return;
+  const sel = S.env.sel.map(String); const i = sel.indexOf(id);
+  if (e.target.checked && i < 0) sel.push(id); else if (!e.target.checked && i >= 0) sel.splice(i, 1);
+  S.env.sel = sel; esdrSum(); regenMsg();
+});
 VIEWS.envio = async () => {
   if (!S.env.data) S.env.data = hojeISO();
   const o = relOpts(), ck = (k, l) => `<label class="chk"><input type="checkbox" data-opt="${k}" ${o[k] ? 'checked' : ''}> ${l}</label>`;
@@ -957,7 +982,7 @@ VIEWS.envio = async () => {
   <div class="env-grid">
     <div class="card"><div class="sec-title" style="margin-top:0">Dia e SDR</div>
       <div class="row wrap" style="gap:8px"><input type="date" id="edata" value="${S.env.data}" max="${hojeISO()}" style="width:auto"><button class="btn sec sm" data-act="envdia" data-v="-1">‹ Anterior</button><button class="btn sec sm" data-act="envdia" data-v="0">Hoje</button></div>
-      <select id="euser" style="margin-top:8px"><option value="">Todas as SDRs</option></select>
+      <details id="esdrs" class="msel" style="margin-top:8px"><summary id="esum" class="btn sec sm">Todas as SDRs ▾</summary><div class="msel-p" id="elist"></div></details>
       <div class="sec-title">O que incluir</div>
       <div class="opts col">${ck('resumo', 'Resumo do dia')}${ck('tabgeral', 'Tabulação por motivo')}${ck('tabsdr', 'Resultado por SDR')}${ck('vendas', 'Vendas')}${ck('interessados', 'Interessados e propostas')}${ck('notas', 'Anotações das SDRs')}${ck('atrasados', 'Retornos atrasados')}${ck('tel', 'Mostrar telefones')}</div>
       <div class="sec-title">Texto</div>
@@ -967,7 +992,6 @@ VIEWS.envio = async () => {
       <div class="row wrap" style="gap:8px;margin-top:8px"><button class="btn sm" data-act="relcopy">${ic('copy', 16)} Copiar</button><button class="btn sec sm" data-act="relwa">Abrir no WhatsApp</button><button class="btn sec sm" data-act="relregen">Refazer texto</button></div></div>
   </div>`;
   $('#edata').addEventListener('change', (e) => { S.env.data = e.target.value || hojeISO(); loadEnv(); });
-  $('#euser').addEventListener('change', (e) => { S.env.user = e.target.value; regenMsg(); });
   loadEnv();
 };
 ACT.envdia = (t) => {
@@ -979,7 +1003,7 @@ ACT.envdia = (t) => {
 async function loadEnv() {
   const ta = $('#rmsg'); if (!ta) return;
   try { S.env.d = await api('/relatorio?data=' + S.env.data); } catch (e) { ta.value = e.message; return; }
-  const sel = $('#euser'); if (sel) sel.innerHTML = '<option value="">Todas as SDRs</option>' + S.env.d.sdrs.map((x) => `<option value="${x.id}" ${String(S.env.user) === String(x.id) ? 'selected' : ''}>${esc(x.nome)}</option>`).join('');
+  esdrPanel();
   regenMsg();
 }
 
@@ -1008,16 +1032,19 @@ ACT.saveint = async (t) => {
 /* ---------- equipe ---------- */
 VIEWS.equipe = async () => {
   S.users = await api('/usuarios');
-  $('#main').innerHTML = `<div class="top"><div><h1>Equipe</h1><div class="muted small">Usuários, metas diárias e acessos</div></div><button class="btn sun sm" data-act="newuser">${ic('plus', 16)} Nova pessoa</button></div>
-  <div class="card" style="padding:6px 14px">${S.users.map((u) => `<div class="list-item" data-act="edituser" data-id="${u.id}"><div class="ava">${esc(first(u.nome)[0] || '?')}</div>
+  const row = (u) => `<div class="list-item" data-act="edituser" data-id="${u.id}"><div class="ava">${esc(first(u.nome)[0] || '?')}</div>
     <div class="grow"><b>${esc(u.nome)}</b><div class="muted small">@${esc(u.usuario)}${u.papel === 'sdr' ? ` · meta ${u.meta_ligacoes} lig. / ${u.meta_whatsapp} WhatsApp` : ''}</div></div>
-    <div class="pills"><span class="chip ${u.papel === 'gestor' ? 'vio' : 'blue'}">${u.papel === 'gestor' ? 'Gestor' : 'SDR'}</span>${u.ativo ? '' : '<span class="chip bad">Inativo</span>'}</div></div>`).join('')}</div>`;
+    <div class="pills"><span class="chip ${u.papel === 'gestor' ? 'vio' : 'blue'}">${u.papel === 'gestor' ? 'Gestor' : 'SDR'}</span>${u.ativo ? '' : '<span class="chip bad">Inativo</span>'}</div></div>`;
+  const ger = S.users.filter((u) => u.papel === 'gestor'), sd = S.users.filter((u) => u.papel !== 'gestor');
+  $('#main').innerHTML = `<div class="top"><div><h1>Equipe</h1><div class="muted small">Logins, senhas, perfis e metas. Toque numa pessoa para editar ou excluir.</div></div><div class="row" style="gap:8px"><button class="btn sec sm" data-act="newuser" data-v="gestor">${ic('plus', 16)} Novo administrador</button><button class="btn sun sm" data-act="newuser" data-v="sdr">${ic('plus', 16)} Nova SDR</button></div></div>
+  <div class="sec-title">Administradores (${ger.length})</div><div class="card" style="padding:6px 14px">${ger.map(row).join('') || '<p class="muted">Nenhum</p>'}</div>
+  <div class="sec-title">SDRs (${sd.length})</div><div class="card" style="padding:6px 14px">${sd.map(row).join('') || '<p class="muted">Nenhuma</p>'}</div>`;
 };
-ACT.newuser = () => modal(`<h2>Nova pessoa</h2>
+ACT.newuser = (t) => modal(`<h2>${t && t.dataset.v === 'gestor' ? 'Novo administrador' : 'Nova pessoa'}</h2>
   <label class="field"><span>Nome</span><input type="text" id="un"></label>
   <label class="field"><span>Usuário (para entrar)</span><input type="text" id="uu" autocapitalize="none" autocorrect="off"></label>
-  <label class="field"><span>Senha provisória (mínimo 6 caracteres)</span><input type="text" id="up"></label>
-  <div class="two"><label class="field"><span>Perfil</span><select id="ur"><option value="sdr">SDR</option><option value="gestor">Gestor</option></select></label>
+  <label class="field"><span>Senha provisória (mínimo 6 caracteres)</span><div class="row" style="gap:6px"><input type="text" id="up" class="grow"><button type="button" class="btn sec sm" data-act="gensenha" data-v="up">Gerar</button></div></label>
+  <div class="two"><label class="field"><span>Perfil</span><select id="ur"><option value="sdr" ${t && t.dataset.v === 'gestor' ? '' : 'selected'}>SDR</option><option value="gestor" ${t && t.dataset.v === 'gestor' ? 'selected' : ''}>Gestor (administrador)</option></select></label>
   <label class="field"><span>Meta de ligações/dia</span><input type="number" id="ul" value="80"></label></div>
   <label class="field"><span>Meta de WhatsApp/dia</span><input type="number" id="uw" value="80"></label>
   <p class="muted small">A pessoa troca a senha no primeiro acesso.</p>
@@ -1028,21 +1055,43 @@ ACT.saveuser = async () => {
     closeModal(); toast('Pessoa cadastrada'); go('equipe');
   } catch (e) { toast(e.message, true); }
 };
+ACT.gensenha = (t) => { const c = 'abcdefghjkmnpqrstuvwxyz23456789'; let s = ''; for (let k = 0; k < 8; k++) s += c[Math.floor(Math.random() * c.length)]; $('#' + t.dataset.v).value = s; };
 ACT.edituser = (t) => {
-  const u = S.users.find((x) => String(x.id) === t.dataset.id);
-  modal(`<h2>${esc(u.nome)}</h2><div class="muted small">@${esc(u.usuario)}</div>
+  const u = S.users.find((x) => String(x.id) === t.dataset.id), eu = S.user && S.user.id === u.id;
+  modal(`<h2>${esc(u.nome)}</h2>
   <label class="field"><span>Nome</span><input type="text" id="en" value="${esc(u.nome)}"></label>
+  <div class="two"><label class="field"><span>Usuário (login)</span><input type="text" id="eu" value="${esc(u.usuario)}" autocapitalize="none" autocorrect="off"></label>
+  <label class="field"><span>Perfil</span><select id="ep" ${eu ? 'disabled' : ''}><option value="sdr" ${u.papel === 'sdr' ? 'selected' : ''}>SDR</option><option value="gestor" ${u.papel === 'gestor' ? 'selected' : ''}>Gestor (administrador)</option></select></label></div>
   <div class="two"><label class="field"><span>Meta de ligações/dia</span><input type="number" id="el" value="${u.meta_ligacoes}"></label>
   <label class="field"><span>Meta de WhatsApp/dia</span><input type="number" id="ew" value="${u.meta_whatsapp}"></label></div>
-  <label class="field"><span>Nova senha provisória (deixe vazio para manter)</span><input type="text" id="es"></label>
-  <label class="field"><span>Situação</span><select id="ea"><option value="1" ${u.ativo ? 'selected' : ''}>Ativo</option><option value="0" ${u.ativo ? '' : 'selected'}>Inativo (sem acesso)</option></select></label>
-  <div class="row" style="margin-top:14px"><button class="btn sec grow" data-act="close">Cancelar</button><button class="btn grow" data-act="updateuser" data-id="${u.id}">Salvar</button></div>`);
+  <label class="field"><span>Nova senha (deixe vazio para manter)</span><div class="row" style="gap:6px"><input type="text" id="es" class="grow"><button type="button" class="btn sec sm" data-act="gensenha" data-v="es">Gerar</button></div></label>
+  <label class="row" style="gap:8px;margin-top:8px"><input type="checkbox" id="et" style="width:auto" checked> <span class="small">Pedir para a pessoa trocar a senha no próximo acesso</span></label>
+  <label class="field"><span>Situação</span><select id="ea" ${eu ? 'disabled' : ''}><option value="1" ${u.ativo ? 'selected' : ''}>Ativo</option><option value="0" ${u.ativo ? '' : 'selected'}>Inativo (sem acesso, mantém o histórico)</option></select></label>
+  <div class="row" style="margin-top:14px">${eu ? '' : `<button class="btn danger sm" data-act="deluser" data-id="${u.id}">Excluir</button>`}<button class="btn sec grow" data-act="close">Cancelar</button><button class="btn grow" data-act="updateuser" data-id="${u.id}">Salvar</button></div>`);
 };
 ACT.updateuser = async (t) => {
+  const eu = S.user && String(S.user.id) === t.dataset.id;
   try {
-    await api('/usuarios/' + t.dataset.id, { method: 'PUT', body: { nome: $('#en').value, meta_ligacoes: $('#el').value, meta_whatsapp: $('#ew').value, senha: $('#es').value || undefined, ativo: $('#ea').value === '1' ? 1 : 0 } });
+    const body = { nome: $('#en').value, usuario: $('#eu').value, meta_ligacoes: $('#el').value, meta_whatsapp: $('#ew').value, senha: $('#es').value || undefined, trocar_senha: $('#et').checked };
+    if (!eu) { body.papel = $('#ep').value; body.ativo = $('#ea').value === '1' ? 1 : 0; }
+    await api('/usuarios/' + t.dataset.id, { method: 'PUT', body });
     closeModal(); toast('Atualizado'); go('equipe');
   } catch (e) { toast(e.message, true); }
+};
+ACT.deluser = async (t) => {
+  const u = S.users.find((x) => String(x.id) === t.dataset.id);
+  let uso; try { uso = await api('/usuarios/' + u.id + '/uso'); } catch (e) { return toast(e.message, true); }
+  const outros = S.users.filter((x) => x.id !== u.id && x.ativo);
+  modal(`<h2>Excluir ${esc(u.nome)}?</h2><p class="muted small">@${esc(u.usuario)} deixa de existir e não consegue mais entrar. Isso não pode ser desfeito.</p>
+  ${uso.leads ? `<label class="field"><span>${uso.leads} contato${uso.leads === 1 ? '' : 's'} desta pessoa: o que fazer?</span><select id="dl"><option value="liberar">Deixar sem dono (voltam para a fila)</option>${outros.map((x) => `<option value="${x.id}">Passar para ${esc(x.nome)}</option>`).join('')}</select></label>` : ''}
+  ${uso.interacoes ? `<label class="row" style="gap:8px;margin-top:10px;align-items:flex-start"><input type="checkbox" id="dh" style="width:auto;margin-top:3px"> <span class="small">Apagar também as <b>${uso.interacoes}</b> atividades (ligações, WhatsApp, anotações) registradas por ela. Sem marcar, não dá para excluir: use <b>Inativo</b> para manter o histórico.</span></label>` : ''}
+  <div class="row" style="margin-top:14px"><button class="btn sec grow" data-act="close">Cancelar</button><button class="btn danger grow" data-act="deluserok" data-id="${u.id}">Excluir de vez</button></div>`);
+};
+ACT.deluserok = async (t) => {
+  const dl = $('#dl'), dh = $('#dh');
+  const q = new URLSearchParams({ leads: dl ? dl.value : 'liberar', apagar_historico: dh && dh.checked ? '1' : '0' });
+  try { await api('/usuarios/' + t.dataset.id + '?' + q, { method: 'DELETE' }); closeModal(); toast('Usuário excluído'); go('equipe'); }
+  catch (e) { toast(e.message, true); }
 };
 
 /* ---------- mensagens ---------- */
