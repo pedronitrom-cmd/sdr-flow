@@ -673,7 +673,7 @@ const RES_TXT = { nao_atendeu: 'Não atendeu', caixa_postal: 'Caixa postal', fal
 const CANAL_TXT = { ligacao: 'Ligação', whatsapp: 'WhatsApp', nota: 'Nota' };
 const brl = (n) => 'R$ ' + Math.round(n || 0).toLocaleString('pt-BR');
 const ATV_COLS = `i.id, i.criado_em, i.canal, i.resultado, i.origem, i.valor, i.nota, i.user_id sdr_id, u.nome sdr_nome,
-  l.id lead_id, l.nome, l.empresa, l.telefone, l.cidade, l.consumo, l.status, l.valor_venda`;
+  l.id lead_id, l.nome, l.empresa, l.telefone, l.cidade, l.consumo, l.status, l.valor_venda, l.lote`;
 
 app.get('/api/atividades', auth(['gestor']), wrap(async (req, res) => {
   const q = req.query;
@@ -703,7 +703,7 @@ app.get('/api/relatorio', auth(['gestor']), wrap(async (req, res) => {
     all(`SELECT owner_id, COUNT(*) c FROM leads WHERE owner_id IS NOT NULL AND status NOT IN ('venda','perdido','invalido') AND followup_em IS NOT NULL AND followup_em < ? GROUP BY owner_id`, [d1 + 1])
   ]);
   for (const r of rows) if (!users.find((u) => u.id === r.sdr_id)) users.push({ id: r.sdr_id, nome: r.sdr_nome, meta_ligacoes: 0, meta_whatsapp: 0 });
-  const slim = (r) => ({ id: r.id, hora: hhmm(r.criado_em), criado_em: r.criado_em, canal: r.canal, resultado: r.resultado, origem: r.origem, valor: r.valor, nota: r.nota, lead_id: r.lead_id, nome: r.nome, empresa: r.empresa, telefone: r.telefone, cidade: r.cidade, status: r.status });
+  const slim = (r) => ({ id: r.id, hora: hhmm(r.criado_em), criado_em: r.criado_em, canal: r.canal, resultado: r.resultado, origem: r.origem, valor: r.valor, nota: r.nota, lead_id: r.lead_id, nome: r.nome, empresa: r.empresa, telefone: r.telefone, cidade: r.cidade, status: r.status, lote: r.lote });
   const sdrs = users.map((u) => {
     const mine = rows.filter((r) => r.sdr_id === u.id);
     const work = mine.filter((r) => r.canal !== 'nota');
