@@ -705,11 +705,18 @@ app.get('/api/atividades', auth(), wrap(async (req, res) => {
 }));
 
 app.get('/api/relatorio', auth(['gestor']), wrap(async (req, res) => {
-  const d0 = parseDia(req.query.data) ?? startOfDay(now());
-  const d1 = d0 + DAY - 1;
+  let dias = String(req.query.datas || '').split(',').map(parseDia).filter((x) => x != null);
+  dias = [...new Set(dias)].sort((x, y) => x - y).slice(0, 92);
+  if (!dias.length) dias = [parseDia(req.query.data) ?? startOfDay(now())];
+  const multi = dias.length > 1;
+  const d0 = dias[0], d1 = dias[dias.length - 1] + DAY - 1;
+  const faixas = [];
+  for (const x of dias) { const u = faixas[faixas.length - 1]; if (u && x === u[1] + 1) u[1] = x + DAY - 1; else faixas.push([x, x + DAY - 1]); }
+  const cond = faixas.map(() => '(i.criado_em>=? AND i.criado_em<=?)').join(' OR ');
+  const cargs = faixas.flat();
   const [users, rows, atras] = await Promise.all([
     all(`SELECT id, nome, meta_ligacoes, meta_whatsapp FROM users WHERE papel='sdr' AND ativo=1 ORDER BY nome`),
-    all(`SELECT ${ATV_COLS} FROM interacoes i JOIN users u ON u.id=i.user_id JOIN leads l ON l.id=i.lead_id WHERE i.criado_em>=? AND i.criado_em<=? ORDER BY i.criado_em`, [d0, d1]),
+    all(`SELECT ${ATV_COLS} FROM interacoes i JOIN users u ON u.id=i.user_id JOIN leads l ON l.id=i.lead_id WHERE (${cond}) ORDER BY i.criado_em`, cargs),
     all(`SELECT owner_id, COUNT(*) c FROM leads WHERE owner_id IS NOT NULL AND status NOT IN ('venda','perdido','invalido') AND followup_em IS NOT NULL AND followup_em < ? GROUP BY owner_id`, [d1 + 1])
   ]);
   for (const r of rows) if (!users.find((u) => u.id === r.sdr_id)) users.push({ id: r.sdr_id, nome: r.sdr_nome, meta_ligacoes: 0, meta_whatsapp: 0 });
@@ -732,8 +739,11 @@ app.get('/api/relatorio', auth(['gestor']), wrap(async (req, res) => {
   totais.contatos = new Set(rows.filter((r) => r.canal !== 'nota').map((r) => r.lead_id)).size;
 
   const dow = new Date(d0 + TZ_OFFSET).getUTCDay();
+  const ano = (ms) => new Date(ms + TZ_OFFSET).getUTCFullYear();
+  const dl = dias[dias.length - 1];
+  const titulo = !multi ? `${SEMANA[dow]}, ${ddmm(d0)}/${ano(d0)}` : (faixas.length === 1 ? `${ddmm(d0)}/${ano(d0)} a ${ddmm(dl)}/${ano(dl)} (${dias.length} dias)` : `${dias.length} dias selecionados (${dias.map(ddmm).join(', ')})`);
   const L = [];
-  L.push(`*Relatório SDR – ${SEMANA[dow]}, ${ddmm(d0)}/${new Date(d0 + TZ_OFFSET).getUTCFullYear()}*`, '');
+  L.push(`*Relatório SDR – ${titulo}*`, '');
   L.push(`*Total da equipe*`, `• Contatos trabalhados: ${totais.contatos}`, `• Ligações: ${totais.ligacoes} (${totais.atendidas} atendidas)`, `• WhatsApp enviados: ${totais.whatsapp} (${totais.respostas} respostas)`, `• Interessados: ${totais.interessados} · Propostas: ${totais.propostas}`, `• Vendas: ${totais.vendas}${totais.valor ? ' – ' + brl(totais.valor) : ''}`, '');
   const fmtL = (r) => `${r.nome}${r.empresa ? ' (' + r.empresa + ')' : ''}${r.cidade ? ' – ' + r.cidade : ''}`;
   for (const s of sdrs) {
@@ -747,7 +757,7 @@ app.get('/api/relatorio', auth(['gestor']), wrap(async (req, res) => {
     if (notas.length) { L.push('• *Anotações:*'); for (const v of notas) L.push(`   – ${v.hora} ${v.nome}: “${v.nota}”`); }
     L.push('');
   }
-  res.json({ data: d0, titulo: `${SEMANA[dow]}, ${ddmm(d0)}/${new Date(d0 + TZ_OFFSET).getUTCFullYear()}`, totais, sdrs, texto: L.join('\n').trim() });
+  res.json({ data: d0, multi, dias: dias.length, titulo, totais, sdrs, texto: L.join('\n').trim() });
 }));
 
 /* ---------- editar atividade (gestor) ---------- */
