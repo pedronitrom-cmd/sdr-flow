@@ -773,6 +773,83 @@ app.put('/api/interacoes/:id', auth(['gestor']), wrap(async (req, res) => {
   res.json({ ok: true, resultado: novoRes, status: leadStatus });
 }));
 
+/* ---------- listas trabalhadas (gestor) ---------- */
+const STATUS_TXT = { novo: 'Novo', abordado: 'Abordado', conversando: 'Conversando', interessado: 'Interessado', proposta: 'Proposta', venda: 'Venda', perdido: 'Perdido', invalido: 'Inválido' };
+const fdh = (ms) => { if (!ms) return ''; const d = new Date(ms + TZ_OFFSET).toISOString(); return d.slice(8, 10) + '/' + d.slice(5, 7) + '/' + d.slice(0, 4) + ' ' + d.slice(11, 16); };
+const faixa = (q) => {
+  const d0 = parseDia(q.de), d1 = parseDia(q.ate);
+  if (d0 == null && d1 == null) return [0, now() + DAY];
+  return [d0 != null ? d0 : 0, d1 != null ? d1 + DAY - 1 : now() + DAY];
+};
+const loteCond = (lote, col = 'l.lote') => lote === '__none' ? [`${col} IS NULL`, []] : (!lote || lote === '__all') ? ['1=1', []] : [`${col} = ?`, [lote]];
+app.get('/api/listas', auth(['gestor']), wrap(async (req, res) => {
+  const [ini, fim] = faixa(req.query);
+  const [rows, leads] = await Promise.all([
+    all(`SELECT i.lead_id, i.canal, i.resultado, i.origem, i.valor, i.nota, i.criado_em, i.user_id, u.nome sdr, l.lote
+         FROM interacoes i JOIN users u ON u.id=i.user_id JOIN leads l ON l.id=i.lead_id WHERE i.criado_em>=? AND i.criado_em<=? ORDER BY i.criado_em`, [ini, fim]),
+    all(`SELECT COALESCE(lote,'') lote, status, COUNT(*) c FROM leads GROUP BY COALESCE(lote,''), status`)
+  ]);
+  const por = new Map();
+  for (const r of rows) { const k = r.lote || ''; if (!por.has(k)) por.set(k, []); por.get(k).push(r); }
+  const out = [];
+  for (const [k, rs] of por) {
+    const work = rs.filter((r) => r.canal !== 'nota');
+    const st = {}; let total = 0;
+    for (const x of leads) if (x.lote === k) { st[x.status] = x.c; total += x.c; }
+    const tab = {}; for (const r of rs) if (r.canal !== 'nota') tab[r.resultado] = (tab[r.resultado] || 0) + 1;
+    const sd = new Map();
+    for (const r of work) { if (!sd.has(r.sdr)) sd.set(r.sdr, { nome: r.sdr, ligacoes: 0, whatsapp: 0, leads: new Set() }); const o = sd.get(r.sdr); o.leads.add(r.lead_id); if (r.canal === 'ligacao') o.ligacoes++; else o.whatsapp++; }
+    out.push({
+      lote: k, nome: k || 'Sem lista', total, status: st, ...calcStats(work),
+      trabalhados: new Set(work.map((r) => r.lead_id)).size, notas: rs.filter((r) => r.nota).length,
+      primeira: rs[0].criado_em, ultima: rs[rs.length - 1].criado_em, tabulacoes: tab,
+      sdrs: [...sd.values()].map((o) => ({ nome: o.nome, ligacoes: o.ligacoes, whatsapp: o.whatsapp, contatos: o.leads.size })).sort((a, b) => b.contatos - a.contatos)
+    });
+  }
+  out.sort((a, b) => b.ultima - a.ultima);
+  res.json(out);
+}));
+const fmtTel = (v) => { let d = String(v || '').replace(/\D/g, ''); if (!d) return ''; if (d.startsWith('55') && (d.length === 12 || d.length === 13)) d = d.slice(2); return d.length === 11 ? `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}` : d.length === 10 ? `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}` : String(v); };
+const fmtCnpj = (v) => { const d = String(v || '').replace(/\D/g, ''); return d.length === 14 ? `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}` : String(v || ''); };
+const csvCell = (v) => { let s = String(v ?? ''); if (/^[=+\-@]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
+const slug = (s) => String(s || 'sem-lista').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase().slice(0, 40) || 'lista';
+app.get('/api/listas/export', auth(['gestor']), wrap(async (req, res) => {
+  const q = req.query, modo = q.modo === 'atividades' ? 'atividades' : 'contatos';
+  const [ini, fim] = faixa(q);
+  const [lc, la] = loteCond(q.lote);
+  const todos = q.todos === '1';
+  const ints = await all(`SELECT i.*, u.nome sdr FROM interacoes i JOIN users u ON u.id=i.user_id JOIN leads l ON l.id=i.lead_id
+    WHERE ${lc} AND i.criado_em>=? AND i.criado_em<=? ORDER BY i.criado_em`, [...la, ini, fim]);
+  const leads = await all(`SELECT l.*, o.nome owner_nome FROM leads l LEFT JOIN users o ON o.id=l.owner_id
+    WHERE ${lc} AND (? = 1 OR EXISTS (SELECT 1 FROM interacoes i WHERE i.lead_id=l.id AND i.criado_em>=? AND i.criado_em<=?)) ORDER BY l.lote, l.nome`, [...la, todos ? 1 : 0, ini, fim]);
+  const byLead = new Map(); for (const r of ints) { if (!byLead.has(r.lead_id)) byLead.set(r.lead_id, []); byLead.get(r.lead_id).push(r); }
+  const cli = (l) => [l.lote || 'Sem lista', l.nome, l.empresa, fmtCnpj(l.cnpj), l.ramo, l.porte, fmtTel(l.telefone), fmtTel(l.alt_tel), l.email, l.cidade, l.consumo, STATUS_TXT[l.status] || l.status, l.owner_nome, l.obs];
+  const H_CLI = ['Lista', 'Contato', 'Empresa', 'CNPJ', 'Ramo', 'Porte', 'Telefone', 'Outro telefone', 'E-mail', 'Cidade', 'Consumo', 'Situação atual', 'Responsável', 'Observações do cadastro'];
+  const lines = [];
+  if (modo === 'contatos') {
+    lines.push([...H_CLI, 'Tentativas', 'Último contato', 'Próximo retorno', 'Valor da venda', 'Última tabulação', 'Última anotação', 'Quem ligou', 'Quem trabalhou', 'Ligações', 'WhatsApp', 'Histórico completo'].map(csvCell).join(';'));
+    for (const l of leads) {
+      const h = byLead.get(l.id) || [], w = h.filter((r) => r.canal !== 'nota');
+      const ult = w[w.length - 1], notas = h.filter((r) => r.nota);
+      const uniq = (a) => [...new Set(a)].join(', ');
+      lines.push([...cli(l), l.tentativas, fdh(l.ultimo_contato), fdh(l.followup_em), l.valor_venda,
+        ult ? RES_TXT[ult.resultado] || ult.resultado : '', notas.length ? notas[notas.length - 1].nota : '',
+        uniq(h.filter((r) => r.canal === 'ligacao').map((r) => r.sdr)), uniq(h.map((r) => r.sdr)),
+        h.filter((r) => r.canal === 'ligacao').length, h.filter((r) => r.canal === 'whatsapp').length,
+        h.map((r) => `${fdh(r.criado_em)} · ${r.sdr} · ${CANAL_TXT[r.canal] || r.canal} · ${RES_TXT[r.resultado] || r.resultado}${r.valor ? ' · ' + brl(r.valor) : ''}${r.nota ? ' · ' + r.nota : ''}`).join(' | ')
+      ].map(csvCell).join(';'));
+    }
+  } else {
+    const L = new Map(leads.map((l) => [l.id, l]));
+    lines.push(['Data/hora', 'SDR', 'Canal', 'Tabulação', 'Origem', 'Valor', 'Anotação', ...H_CLI].map(csvCell).join(';'));
+    for (const r of ints) { const l = L.get(r.lead_id); if (!l) continue;
+      lines.push([fdh(r.criado_em), r.sdr, CANAL_TXT[r.canal] || r.canal, RES_TXT[r.resultado] || r.resultado, r.origem, r.valor, r.nota, ...cli(l)].map(csvCell).join(';')); }
+  }
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="lista-${slug(q.lote === '__all' || !q.lote ? 'todas' : q.lote === '__none' ? 'sem-lista' : q.lote)}-${modo}.csv"`);
+  res.send('\uFEFF' + lines.join('\r\n'));
+}));
+
 app.get('/api/export.csv', auth(['gestor']), wrap(async (req, res) => {
   const [ini, fim] = rangeFor(req.query.periodo || '30d');
   const rows = await all(`SELECT i.criado_em, u.nome sdr, l.nome cliente, l.telefone, l.cidade, i.canal, i.resultado, i.origem, i.valor, i.nota
