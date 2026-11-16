@@ -578,18 +578,27 @@ function porDia(rows, hoje0, n) {
 }
 
 app.get('/api/stats/meu', auth(), wrap(async (req, res) => {
-  const t = now(), ini = startOfDay(t);
-  const rows = await all(`SELECT lead_id, canal, resultado, origem, valor, criado_em FROM interacoes WHERE user_id=? AND criado_em>=? AND canal!='nota'`, [req.user.id, ini - 6 * DAY]);
+  const t = now(), ini = startOfDay(t), q = req.query;
+  const d0 = parseDia(q.de), d1 = parseDia(q.ate);
+  let [pi, pf] = d0 != null ? [d0, (d1 != null ? d1 : d0) + DAY - 1] : [ini, t];
+  if (pf - pi > 366 * DAY) pi = pf - 366 * DAY;
+  const canal = q.canal === 'ligacao' || q.canal === 'whatsapp' ? q.canal : '';
+  const minIni = Math.min(ini - 6 * DAY, pi);
+  const rows = await all(`SELECT lead_id, canal, resultado, origem, valor, criado_em FROM interacoes WHERE user_id=? AND criado_em>=? AND criado_em<=? AND canal!='nota'`, [req.user.id, minIni, Math.max(pf, t)]);
+  const semRows = rows.filter((r) => r.criado_em >= ini - 6 * DAY);
   const hojeRows = rows.filter((r) => r.criado_em >= ini);
+  const per = rows.filter((r) => r.criado_em >= pi && r.criado_em <= pf && (!canal || r.canal === canal));
   const horas = new Array(24).fill(0);
-  hojeRows.forEach((r) => { horas[hourOf(r.criado_em)]++; });
+  per.forEach((r) => { horas[hourOf(r.criado_em)]++; });
+  const tab = {}; per.forEach((r) => { tab[r.resultado] = (tab[r.resultado] || 0) + 1; });
+  const dias = Math.min(62, Math.max(1, Math.round((startOfDay(pf) - startOfDay(pi)) / DAY) + 1));
   const cfg = await getConfig();
   res.json({
-    hoje: calcStats(hojeRows), semana: calcStats(rows), porDia: porDia(rows, ini, 7), horas,
+    hoje: calcStats(hojeRows), semana: calcStats(semRows), porDia: porDia(rows.filter((r) => !canal || r.canal === canal), startOfDay(pf), dias), horas,
+    periodo: { ...calcStats(per), contatos: new Set(per.map((r) => r.lead_id)).size, tab, de: pi, ate: pf },
     metas: { ligacoes: req.user.meta_ligacoes, whatsapp: req.user.meta_whatsapp }, whatsapp_limite: parseInt(cfg.wa_limite_dia)
   });
 }));
-
 app.get('/api/stats/equipe', auth(['gestor']), wrap(async (req, res) => {
   const periodo = req.query.periodo || 'hoje';
   const [ini, fim] = rangeFor(periodo);
@@ -675,8 +684,9 @@ const brl = (n) => 'R$ ' + Math.round(n || 0).toLocaleString('pt-BR');
 const ATV_COLS = `i.id, i.criado_em, i.canal, i.resultado, i.origem, i.valor, i.nota, i.user_id sdr_id, u.nome sdr_nome,
   l.id lead_id, l.nome, l.empresa, l.telefone, l.cidade, l.consumo, l.status, l.valor_venda, l.lote`;
 
-app.get('/api/atividades', auth(['gestor']), wrap(async (req, res) => {
-  const q = req.query;
+app.get('/api/atividades', auth(), wrap(async (req, res) => {
+  const q = { ...req.query };
+  if (req.user.papel !== 'gestor') q.user = req.user.id;
   const d0 = parseDia(q.de), d1 = parseDia(q.ate);
   const [ini, fim] = d0 != null ? [d0, (d1 != null ? d1 : d0) + DAY - 1] : rangeFor(q.periodo || 'hoje');
   const cond = ['i.criado_em>=?', 'i.criado_em<=?']; const args = [ini, fim];
