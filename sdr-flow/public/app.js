@@ -431,24 +431,63 @@ function hoursHeat(h) {
   const max = Math.max(1, ...h);
   return `<div class="hours">${h.map((v, i) => `<div class="${v ? 'a' : ''}" style="${v ? 'opacity:' + (0.3 + 0.7 * v / max).toFixed(2) : ''}" title="${i}h: ${v}"></div>`).join('')}</div><div class="hlabels"><span>0h</span><span>6h</span><span>12h</span><span>18h</span><span>23h</span></div>`;
 }
+S.nm = S.nm || { de: '', ate: '', canal: '', res: '', q: '', notas: false, itens: [], total: 0 };
+const fdia = (iso) => iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4);
+const NM_RES = [['nao_atendeu', 'Não atendeu'], ['caixa_postal', 'Caixa postal'], ['falou', 'Falou com o cliente'], ['respondeu', 'Respondeu (WhatsApp)'], ['enviado', 'Mensagem enviada'], ['interessado', 'Interessado'], ['proposta', 'Proposta enviada'], ['venda', 'Venda fechada'], ['sem_interesse', 'Sem interesse'], ['invalido', 'Número inválido']];
 VIEWS.numeros = async () => {
-  const s = await api('/stats/meu'); const h = s.hoje, w = s.semana;
-  $('#main').innerHTML = `<div class="top"><div><h1>Meus números</h1><div class="muted small">Seu desempenho hoje e na semana</div></div></div>
-  <div class="card">${progRow('Ligações', h.ligacoes, s.metas.ligacoes, 'g')}${progRow('WhatsApp enviados', h.whatsapp, s.metas.whatsapp, 'w')}</div>
-  <div class="sec-title">Hoje</div>
-  <div class="kpis">
-    <div class="kpi"><div class="l">Ligações</div><div class="v">${h.ligacoes}</div><div class="s">${pct(h.atendidas, h.ligacoes)} atendidas</div></div>
-    <div class="kpi"><div class="l">WhatsApp</div><div class="v">${h.whatsapp}</div><div class="s">${h.respostas} respostas</div></div>
-    <div class="kpi"><div class="l">Follow-ups feitos</div><div class="v">${h.followups}</div></div>
-    <div class="kpi"><div class="l">Interessados</div><div class="v">${h.interessados}</div></div>
-    <div class="kpi hl"><div class="l">Vendas</div><div class="v">${h.vendas}</div><div class="s">${h.valor ? money(h.valor) : ' '}</div></div>
-    <div class="kpi"><div class="l">Propostas</div><div class="v">${h.propostas}</div></div>
-    <div class="kpi"><div class="l">Semana: contatos</div><div class="v">${num(w.ligacoes + w.whatsapp)}</div></div>
-    <div class="kpi"><div class="l">Semana: vendas</div><div class="v">${w.vendas}</div></div>
-  </div>
-  <div class="sec-title">Contatos por dia (7 dias)</div><div class="card">${barsDias(s.porDia)}</div>
-  <div class="sec-title">Atividade por hora (hoje)</div><div class="card">${hoursHeat(s.horas)}</div>`;
+  const n = S.nm; if (!n.de) { n.de = hojeISO(); n.ate = hojeISO(); }
+  $('#main').innerHTML = `<div class="top"><div><h1>Meus números</h1><div class="muted small">Seu desempenho e todos os seus registros</div></div></div>
+  <div class="card" style="margin-bottom:12px"><div class="row wrap" style="gap:8px"><input type="date" id="nde" value="${n.de}" style="width:auto"><span class="small muted">até</span><input type="date" id="nate" value="${n.ate}" style="width:auto">
+    <select id="ncanal" style="width:auto"><option value="">Ligações e WhatsApp</option><option value="ligacao" ${n.canal === 'ligacao' ? 'selected' : ''}>Só ligações</option><option value="whatsapp" ${n.canal === 'whatsapp' ? 'selected' : ''}>Só WhatsApp</option></select></div>
+    <div class="chips" style="margin-top:8px"><button class="fchip" data-act="nmper" data-v="hoje">Hoje</button><button class="fchip" data-act="nmper" data-v="ontem">Ontem</button><button class="fchip" data-act="nmper" data-v="7">7 dias</button><button class="fchip" data-act="nmper" data-v="mes">Este mês</button><button class="fchip" data-act="nmper" data-v="30">30 dias</button></div></div>
+  <div id="nbody"><p class="muted">Carregando…</p></div>`;
+  const ch = () => { n.de = $('#nde').value || hojeISO(); n.ate = $('#nate').value || n.de; n.canal = $('#ncanal').value; loadNum(); };
+  $('#nde').addEventListener('change', ch); $('#nate').addEventListener('change', ch); $('#ncanal').addEventListener('change', ch);
+  loadNum();
 };
+ACT.nmper = (t) => {
+  const v = t.dataset.v, n = S.nm, d = (o) => new Date(Date.now() - 3 * 3600 * 1000 - o * 86400000).toISOString().slice(0, 10);
+  if (v === 'hoje') { n.de = d(0); n.ate = d(0); } else if (v === 'ontem') { n.de = d(1); n.ate = d(1); } else if (v === '7') { n.de = d(6); n.ate = d(0); } else if (v === '30') { n.de = d(29); n.ate = d(0); } else { n.de = d(0).slice(0, 8) + '01'; n.ate = d(0); }
+  $('#nde').value = n.de; $('#nate').value = n.ate; loadNum();
+};
+ACT.nmres = (t) => { S.nm.res = S.nm.res === t.dataset.v ? '' : t.dataset.v; loadNum(true); };
+ACT.nmmais = () => loadReg(true);
+async function loadNum(soLista) {
+  const n = S.nm, box = $('#nbody'); if (!box) return;
+  try {
+    if (!soLista) n.s = await api('/stats/meu?' + new URLSearchParams({ de: n.de, ate: n.ate, canal: n.canal }));
+  } catch (e) { box.innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; return; }
+  const s = n.s, p = s.periodo, h = s.hoje, tb = p.tab || {};
+  const k = (l, v, sub, hl) => `<div class="kpi ${hl ? 'hl' : ''}"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${sub || ' '}</div></div>`;
+  const ro = !n.de ? '' : (n.de === n.ate ? fdia(n.de) : fdia(n.de) + ' a ' + fdia(n.ate));
+  box.innerHTML = `<div class="card">${progRow('Ligações hoje', h.ligacoes, s.metas.ligacoes, 'g')}${progRow('WhatsApp enviados hoje', h.whatsapp, s.metas.whatsapp, 'w')}</div>
+  <div class="sec-title">Resumo do período · ${esc(ro)}</div>
+  <div class="kpis">
+    ${k('Contatos trabalhados', num(p.contatos))}${k('Ligações', num(p.ligacoes), pct(p.atendidas, p.ligacoes) + ' atendidas')}${k('WhatsApp enviados', num(p.whatsapp), p.respostas + ' respostas')}${k('Follow-ups feitos', num(p.followups))}
+    ${k('Interessados', num(p.interessados))}${k('Propostas', num(p.propostas))}${k('Vendas', num(p.vendas), p.valor ? money(p.valor) : '', true)}${k('Sem interesse', num(tb.sem_interesse || 0))}
+    ${k('Não atendeu', num(tb.nao_atendeu || 0))}${k('Caixa postal', num(tb.caixa_postal || 0))}${k('Número inválido', num(tb.invalido || 0))}${k('Falou com o cliente', num(tb.falou || 0))}
+  </div>
+  <div class="sec-title">Meus registros</div>
+  <div class="chips"><button class="fchip ${n.res ? '' : 'on'}" data-act="nmres" data-v="">Todos</button>${NM_RES.filter(([r]) => tb[r]).map(([r, l]) => `<button class="fchip ${n.res === r ? 'on' : ''}" data-act="nmres" data-v="${r}">${l} <b>${tb[r]}</b></button>`).join('')}</div>
+  <div class="row wrap" style="gap:8px;margin:10px 0"><input type="search" id="nq" placeholder="Buscar nome, telefone, empresa ou anotação" value="${esc(n.q)}" style="flex:1;min-width:200px"><label class="row" style="gap:6px"><input type="checkbox" id="nnotas" ${n.notas ? 'checked' : ''} style="width:auto"> <span class="small">Só com anotação</span></label></div>
+  <div class="card" style="padding:6px 14px" id="nlista"></div><div id="nmais"></div>
+  <div class="sec-title">Contatos por dia</div><div class="card">${barsDias(s.porDia)}</div>
+  <div class="sec-title">Atividade por hora</div><div class="card">${hoursHeat(s.horas)}</div>`;
+  let tm; $('#nq').addEventListener('input', (e) => { clearTimeout(tm); tm = setTimeout(() => { n.q = e.target.value; loadReg(); }, 350); });
+  $('#nnotas').addEventListener('change', (e) => { n.notas = e.target.checked; loadReg(); });
+  loadReg();
+}
+async function loadReg(mais) {
+  const n = S.nm, box = $('#nlista'); if (!box) return;
+  const p = new URLSearchParams({ de: n.de, ate: n.ate, limit: 50, offset: mais ? n.itens.length : 0 });
+  if (n.canal) p.set('canal', n.canal); if (n.res) p.set('resultado', n.res); if (n.q) p.set('q', n.q); if (n.notas) p.set('so_notas', '1');
+  try {
+    const r = await api('/atividades?' + p);
+    n.itens = mais ? n.itens.concat(r.itens) : r.itens; n.total = r.total;
+  } catch (e) { box.innerHTML = `<p class="muted small" style="padding:8px 0">${esc(e.message)}</p>`; return; }
+  box.innerHTML = n.itens.length ? n.itens.map((a) => atvRow(a)).join('') : '<p class="muted small" style="padding:10px 0">Nenhum registro com esses filtros.</p>';
+  const m = $('#nmais'); if (m) m.innerHTML = n.total > n.itens.length ? `<button class="btn sec block" style="margin-top:10px" data-act="nmmais">Carregar mais (${n.itens.length} de ${n.total})</button>` : (n.total ? `<div class="tiny muted" style="text-align:center;margin-top:8px">${n.total} registro${n.total === 1 ? '' : 's'}</div>` : '');
+}
 
 /* ---------- contatos ---------- */
 VIEWS.contatos = async () => {
@@ -817,7 +856,7 @@ ACT.export = async () => {
 function atvRow(a) {
   return `<div class="list-item atv" data-act="open" data-id="${a.lead_id}"><div class="ava ${a.resultado === 'venda' ? 'ok' : ''}">${esc(first(a.nome)[0] || '?')}</div>
     <div class="grow"><div class="row sp"><b>${esc(a.nome)}${a.empresa ? ' · ' + esc(a.empresa) : ''}</b><span class="tiny muted">${fdt(a.criado_em)}${editBtn(a)}</span></div>
-      <div class="muted small">${fmtPhone(a.telefone)}${a.cidade ? ' · ' + esc(a.cidade) : ''} · ${esc(a.sdr_nome)}</div>
+      <div class="muted small">${fmtPhone(a.telefone)}${a.cidade ? ' · ' + esc(a.cidade) : ''} ${S.user.papel === 'gestor' ? ' · ' + esc(a.sdr_nome) : ''}</div>
       <div class="small" style="margin-top:2px">${CANAL_L[a.canal] || a.canal} · ${RES_LABEL[a.resultado] || a.resultado}${a.valor ? ' · <b>' + money(a.valor) + '</b>' : ''}</div>
       ${a.nota ? `<div class="nota">${esc(a.nota)}</div>` : ''}</div></div>`;
 }
