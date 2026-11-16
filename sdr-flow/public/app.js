@@ -142,7 +142,7 @@ function viewLogin() {
 /* ---------- shell ---------- */
 const NAV = {
   sdr: [['fila', 'Fila', 'phone'], ['hoje', 'Hoje', 'calendar'], ['numeros', 'Números', 'chart'], ['contatos', 'Contatos', 'user']],
-  gestor: [['painel', 'Painel', 'chart'], ['relatorio', 'Relatório', 'calendar'], ['envio', 'Enviar', 'chat'], ['contatos', 'Contatos', 'upload'], ['equipe', 'Equipe', 'users'], ['mensagens', 'Mensagens', 'msg'], ['config', 'Ajustes', 'sliders']]
+  gestor: [['painel', 'Painel', 'chart'], ['relatorio', 'Relatório', 'calendar'], ['listas', 'Listas', 'download'], ['envio', 'Enviar', 'chat'], ['contatos', 'Contatos', 'upload'], ['equipe', 'Equipe', 'users'], ['mensagens', 'Mensagens', 'msg'], ['config', 'Ajustes', 'sliders']]
 };
 function renderShell() {
   const nav = NAV[S.user.papel];
@@ -1129,6 +1129,53 @@ ACT.deluserok = async (t) => {
   const q = new URLSearchParams({ leads: dl ? dl.value : 'liberar', apagar_historico: dh && dh.checked ? '1' : '0' });
   try { await api('/usuarios/' + t.dataset.id + '?' + q, { method: 'DELETE' }); closeModal(); toast('Usuário excluído'); go('equipe'); }
   catch (e) { toast(e.message, true); }
+};
+
+/* ---------- listas trabalhadas (gestor) ---------- */
+S.lst = S.lst || { de: '', ate: '', d: [] };
+const diaISO = (off) => new Date(Date.now() - 3 * 3600 * 1000 - off * 86400000).toISOString().slice(0, 10);
+VIEWS.listas = async () => {
+  $('#main').innerHTML = `<div class="top"><div><h1>Listas</h1><div class="muted small">Todas as listas trabalhadas, com tabulações, e exportação para Excel (CSV)</div></div>
+    <div class="row wrap" style="gap:8px"><button class="btn sec sm" data-act="lstexp" data-lote="__all" data-modo="contatos">${ic('download', 16)} Tudo por contato</button><button class="btn sec sm" data-act="lstexp" data-lote="__all" data-modo="atividades">${ic('download', 16)} Tudo por atividade</button></div></div>
+  <div class="card row wrap" style="gap:8px;margin-bottom:12px"><span class="small muted">Período</span><input type="date" id="lde" value="${S.lst.de}" style="width:auto"><span class="small muted">até</span><input type="date" id="late" value="${S.lst.ate}" style="width:auto">
+    <button class="btn sec sm" data-act="lstper" data-v="tudo">Tudo</button><button class="btn sec sm" data-act="lstper" data-v="hoje">Hoje</button><button class="btn sec sm" data-act="lstper" data-v="7">7 dias</button><button class="btn sec sm" data-act="lstper" data-v="mes">Este mês</button></div>
+  <div id="lbody"><p class="muted">Carregando…</p></div>`;
+  $('#lde').addEventListener('change', (e) => { S.lst.de = e.target.value; loadLst(); });
+  $('#late').addEventListener('change', (e) => { S.lst.ate = e.target.value; loadLst(); });
+  loadLst();
+};
+ACT.lstper = (t) => {
+  const v = t.dataset.v;
+  if (v === 'tudo') { S.lst.de = ''; S.lst.ate = ''; } else if (v === 'hoje') { S.lst.de = diaISO(0); S.lst.ate = diaISO(0); } else if (v === '7') { S.lst.de = diaISO(6); S.lst.ate = diaISO(0); } else { S.lst.de = diaISO(0).slice(0, 8) + '01'; S.lst.ate = diaISO(0); }
+  $('#lde').value = S.lst.de; $('#late').value = S.lst.ate; loadLst();
+};
+const lstQS = () => { const p = new URLSearchParams(); if (S.lst.de) p.set('de', S.lst.de); if (S.lst.ate || S.lst.de) p.set('ate', S.lst.ate || S.lst.de); return p; };
+async function loadLst() {
+  const box = $('#lbody'); if (!box) return;
+  try { S.lst.d = await api('/listas?' + lstQS()); } catch (e) { box.innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; return; }
+  const L = S.lst.d;
+  if (!L.length) { box.innerHTML = '<div class="card"><p class="muted">Nenhuma lista com atividade neste período.</p></div>'; return; }
+  const tot = L.reduce((a, x) => ({ c: a.c + x.trabalhados, l: a.l + x.ligacoes, v: a.v + x.vendas }), { c: 0, l: 0, v: 0 });
+  box.innerHTML = `<div class="muted small" style="margin-bottom:6px">${L.length} lista${L.length === 1 ? '' : 's'} · ${num(tot.c)} contatos trabalhados · ${num(tot.l)} ligações · ${num(tot.v)} vendas</div>` + L.map((x, i) => `<div class="card" style="margin-top:12px">
+    <div class="row sp wrap" style="gap:8px"><div><b>${esc(x.nome)}</b><div class="tiny muted">${num(x.total)} contato${x.total === 1 ? '' : 's'} na lista · ${num(x.trabalhados)} trabalhados · última atividade ${fdt(x.ultima)}</div></div>
+      <div class="row wrap" style="gap:6px"><button class="btn sec sm" data-act="lstexp" data-i="${i}" data-modo="contatos">${ic('download', 16)} Exportar contatos</button><button class="btn sec sm" data-act="lstexp" data-i="${i}" data-modo="atividades">${ic('download', 16)} Exportar atividades</button></div></div>
+    <div class="nums" style="margin-top:10px"><div><b>${num(x.ligacoes)}</b><span>ligações (${num(x.atendidas)} atend.)</span></div><div><b>${num(x.whatsapp)}</b><span>WhatsApp</span></div><div><b>${num(x.interessados)}</b><span>interessados</span></div><div><b>${num(x.vendas)}</b><span>vendas${x.valor ? ' · ' + money(x.valor) : ''}</span></div></div>
+    <div class="tiny" style="margin-top:8px"><b>Quem trabalhou:</b> ${x.sdrs.map((s) => `${esc(s.nome)} (${s.contatos} contato${s.contatos === 1 ? '' : 's'} · ${s.ligacoes} lig. · ${s.whatsapp} WhatsApp)`).join(' · ') || '—'}</div>
+    <details style="margin-top:8px"><summary class="small"><b>Tabulações e situação dos contatos</b></summary>
+      <div class="sec-title">Tabulações marcadas${x.notas ? ` · ${x.notas} com anotação` : ''}</div><div class="chips">${Object.entries(x.tabulacoes).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<span class="fchip">${esc(RES_LABEL[k] || k)} <b>${v}</b></span>`).join('')}</div>
+      <div class="sec-title">Situação atual dos contatos da lista</div><div class="chips">${Object.entries(x.status).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<span class="fchip">${esc((STATUS[k] || [k])[0])} <b>${v}</b></span>`).join('')}</div></details></div>`).join('');
+}
+ACT.lstexp = async (t) => {
+  const p = lstQS(); const i = t.dataset.i;
+  p.set('lote', i !== undefined ? (S.lst.d[i].lote || '__none') : t.dataset.lote); p.set('modo', t.dataset.modo);
+  try {
+    const r = await fetch('/api/listas/export?' + p, { headers: { Authorization: 'Bearer ' + TOKEN } });
+    if (!r.ok) throw new Error('Falha ao exportar');
+    const m = /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '');
+    const blob = await r.blob(), a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = m ? m[1] : 'lista.csv'; document.body.appendChild(a); a.click(); a.remove();
+    toast('Arquivo gerado');
+  } catch (e) { toast(e.message, true); }
 };
 
 /* ---------- mensagens ---------- */
