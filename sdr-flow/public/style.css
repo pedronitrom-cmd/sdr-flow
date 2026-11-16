@@ -186,3 +186,12 @@ details summary{cursor:pointer;padding:6px 0}
 @media(max-width:820px){.env-grid{grid-template-columns:1fr}}
 
 .msel{position:relative;display:inline-block}.msel summary{list-style:none;cursor:pointer}.msel summary::-webkit-details-marker{display:none}.msel-p{position:absolute;z-index:20;left:0;top:100%;margin-top:4px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:10px;box-shadow:0 8px 24px rgba(0,0,0,.14);min-width:210px}.msel-p label{display:flex;gap:8px;align-items:center;padding:5px 0;cursor:pointer;font-size:14px}.msel-p input{width:auto;margin:0}
+
+.cal-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;text-align:center}
+.cal i{font-style:normal;font-size:11px;color:#6b7280;padding:2px 0}
+.cal-d{border:1px solid transparent;background:#f3f4f6;border-radius:8px;padding:7px 0;font-size:13px;cursor:pointer;color:#111827}
+.cal-d:hover:not(:disabled){background:#e5e7eb}
+.cal-d.hoje{border-color:#f59e0b}
+.cal-d.on{background:var(--navy);color:#fff;font-weight:700}
+.cal-d:disabled{opacity:.3;cursor:default}

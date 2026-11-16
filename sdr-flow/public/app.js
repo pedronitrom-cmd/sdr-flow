@@ -862,7 +862,7 @@ function atvRow(a) {
 }
 const hojeISO = () => new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
 const MOTIVOS = [['nao_atendeu', 'Não atendeu', 'N.Atend'], ['caixa_postal', 'Caixa postal', 'CxPost'], ['falou', 'Falou com o cliente', 'Falou'], ['respondeu', 'Respondeu (WhatsApp)', 'Resp'], ['enviado', 'Mensagem enviada', 'Enviada'], ['interessado', 'Interessado', 'Interes'], ['proposta', 'Proposta enviada', 'Propost'], ['venda', 'Venda fechada', 'Venda'], ['sem_interesse', 'Sem interesse', 'S.Int'], ['invalido', 'Número inválido', 'Invál']];
-S.rel = S.rel || { data: '', user: '', motivo: '', d: null };
+S.rel = S.rel || { data: '', dias: [], user: '', motivo: '', d: null };
 S.rel.sel = S.rel.sel || [];
 const REL_DEF = { resumo: true, tabgeral: true, tabsdr: true, vendas: true, interessados: true, notas: true, atrasados: false, tel: false, cab: 'Relatório SDR', rod: '' };
 function relOpts() { let o = {}; try { o = JSON.parse(localStorage.getItem('sdrflow_relopts') || '{}'); } catch (e) { /* sem storage */ } return { ...REL_DEF, ...o }; }
@@ -906,23 +906,69 @@ function buildMsg(d, o, sdrs) {
   if (o.rod) L.push(o.rod);
   return L.join('\n').trim();
 }
+const isoAdd = (iso, n) => { const d = new Date(iso + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const fbr = (iso) => iso.slice(8, 10) + '/' + iso.slice(5, 7);
+const rangeISO = (a, b) => { if (a > b) [a, b] = [b, a]; const out = []; for (let x = a; x <= b && out.length < 92; x = isoAdd(x, 1)) out.push(x); return out; };
+const relDias = () => (S.rel.dias && S.rel.dias.length ? S.rel.dias : [hojeISO()]);
+function rdSum() {
+  const el = $('#rdsum'); if (!el) return;
+  const d = relDias(), h = hojeISO();
+  const cont = d.length > 1 && d[d.length - 1] === isoAdd(d[0], d.length - 1);
+  el.textContent = (d.length === 1 ? (d[0] === h ? 'Hoje · ' : '') + d[0].slice(8, 10) + '/' + d[0].slice(5, 7) + '/' + d[0].slice(0, 4) : cont ? fbr(d[0]) + ' a ' + fbr(d[d.length - 1]) + ' (' + d.length + ' dias)' : d.length + ' datas escolhidas') + ' ▾';
+}
+function rdPanel() {
+  const box = $('#rdlist'); if (!box) return;
+  const h = hojeISO(), sel = new Set(relDias());
+  const mes = S.rel.cal || relDias()[0].slice(0, 7);
+  const [Y, M] = mes.split('-').map(Number);
+  const first = new Date(Date.UTC(Y, M - 1, 1)).getUTCDay(), nd = new Date(Date.UTC(Y, M, 0)).getUTCDate();
+  const NM = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+  let cells = ''; for (let i = 0; i < first; i++) cells += '<span></span>';
+  for (let d = 1; d <= nd; d++) { const iso = `${mes}-${String(d).padStart(2, '0')}`; const fut = iso > h; cells += `<button type="button" class="cal-d ${sel.has(iso) ? 'on' : ''} ${iso === h ? 'hoje' : ''}" ${fut ? 'disabled' : `data-act="rdtog" data-v="${iso}"`}>${d}</button>`; }
+  const dias = relDias();
+  const q = (id, t) => `<button class="fchip" data-act="rdq" data-v="${id}">${t}</button>`;
+  box.innerHTML = `<div class="chips" style="margin-bottom:8px">${q('hoje', 'Hoje')}${q('ontem', 'Ontem')}${q('7', 'Últimos 7 dias')}${q('mes', 'Este mês')}${q('mesant', 'Mês passado')}</div>
+  <div class="cal-h"><button type="button" class="btn sec sm" data-act="rdmes" data-v="-1">‹</button><b>${NM[M - 1]} de ${Y}</b><button type="button" class="btn sec sm" data-act="rdmes" data-v="1" ${mes >= h.slice(0, 7) ? 'disabled' : ''}>›</button></div>
+  <div class="cal"><i>D</i><i>S</i><i>T</i><i>Q</i><i>Q</i><i>S</i><i>S</i>${cells}</div>
+  <div class="tiny muted" style="margin:6px 0 4px">Clique nos dias para marcar ou desmarcar quantos quiser.</div>
+  <div class="row wrap" style="gap:6px;margin:6px 0"><span class="tiny muted">Intervalo:</span><input type="date" id="rdde" max="${h}" style="width:auto"><span class="tiny muted">até</span><input type="date" id="rdate" max="${h}" style="width:auto"><button type="button" class="btn sec sm" data-act="rdint">Aplicar</button></div>
+  <div class="tiny muted">${dias.length} dia${dias.length === 1 ? '' : 's'} marcado${dias.length === 1 ? '' : 's'}</div>
+  <div class="row" style="gap:6px;margin-top:8px"><button type="button" class="btn sec sm" data-act="rdq" data-v="hoje">Limpar</button><button type="button" class="btn sm" data-act="rdok">Pronto</button></div>`;
+  rdSum();
+}
+let relTimer = null;
+function relAgenda() { rdPanel(); clearTimeout(relTimer); relTimer = setTimeout(() => drawRel(true), 350); }
+ACT.rdtog = (t) => { const iso = t.dataset.v, d = new Set(relDias()); if (d.has(iso)) { if (d.size > 1) d.delete(iso); } else d.add(iso); S.rel.dias = [...d].sort(); relAgenda(); };
+ACT.rdmes = (t) => { const [Y, M] = (S.rel.cal || relDias()[0].slice(0, 7)).split('-').map(Number); const d = new Date(Date.UTC(Y, M - 1 + Number(t.dataset.v), 1)); S.rel.cal = d.toISOString().slice(0, 7); rdPanel(); };
+ACT.rdq = (t) => {
+  const h = hojeISO(), v = t.dataset.v; let r;
+  if (v === 'hoje') r = [h]; else if (v === 'ontem') r = [isoAdd(h, -1)]; else if (v === '7') r = rangeISO(isoAdd(h, -6), h);
+  else if (v === 'mes') r = rangeISO(h.slice(0, 7) + '-01', h);
+  else { const p = isoAdd(h.slice(0, 7) + '-01', -1); r = rangeISO(p.slice(0, 7) + '-01', p); }
+  S.rel.dias = r; S.rel.cal = r[0].slice(0, 7); relAgenda();
+};
+ACT.rdint = () => { const a = $('#rdde').value, b = $('#rdate').value; if (!a && !b) return toast('Escolha as datas do intervalo', true); const h = hojeISO(); const x = a || b, y = b || a; S.rel.dias = rangeISO(x, y).filter((i) => i <= h); if (!S.rel.dias.length) S.rel.dias = [h]; S.rel.cal = S.rel.dias[0].slice(0, 7); relAgenda(); };
+ACT.rdok = () => { const d = $('#rdatas'); if (d) d.removeAttribute('open'); };
+document.addEventListener('click', (e) => { const d = $('#rdatas'); if (d && d.open && !e.composedPath().includes(d)) d.removeAttribute('open'); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { const d = $('#rdatas'); if (d) d.removeAttribute('open'); } });
 VIEWS.relatorio = async () => {
-  if (!S.rel.data) S.rel.data = hojeISO();
-  $('#main').innerHTML = `<div class="top"><div><h1>Relatório do dia</h1><div class="muted small">O que cada SDR fez, com as anotações</div></div></div>
-  <div class="card row wrap" style="gap:8px;margin-bottom:12px"><input type="date" id="rdata" value="${S.rel.data}" max="${hojeISO()}" style="width:auto">
+  if (!S.rel.dias || !S.rel.dias.length) S.rel.dias = [S.rel.data || hojeISO()];
+  $('#main').innerHTML = `<div class="top"><div><h1>Relatório</h1><div class="muted small">O que cada SDR fez, com as anotações — escolha um ou vários dias</div></div></div>
+  <div class="card row wrap" style="gap:8px;margin-bottom:12px">
+    <details id="rdatas" class="msel"><summary id="rdsum" class="btn sec sm">Datas ▾</summary><div class="msel-p" id="rdlist" style="min-width:300px"></div></details>
     <button class="btn sec sm" data-act="reldia" data-v="-1">‹ Dia anterior</button><button class="btn sec sm" data-act="reldia" data-v="0">Hoje</button>
     <details id="rsdrs" class="msel"><summary id="rsum" class="btn sec sm">Todas as SDRs ▾</summary><div class="msel-p" id="rlist"></div></details>
     <select id="rlote" style="width:auto;max-width:260px"><option value="">Todas as listas</option></select></div>
   <div id="rbody"><p class="muted">Carregando…</p></div>`;
-  $('#rdata').addEventListener('change', (e) => { S.rel.data = e.target.value || hojeISO(); drawRel(true); });
   $('#rlote').addEventListener('change', (e) => { S.rel.lote = e.target.value; drawRel(); });
+  rdPanel();
   drawRel(true);
 };
 ACT.reldia = (t) => {
-  const v = Number(t.dataset.v);
-  if (v === 0) S.rel.data = hojeISO();
-  else { const d = new Date(S.rel.data + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + v); S.rel.data = d.toISOString().slice(0, 10); }
-  $('#rdata').value = S.rel.data; drawRel(true);
+  const v = Number(t.dataset.v), h = hojeISO();
+  const d = relDias();
+  S.rel.dias = [v === 0 ? h : isoAdd(d[0], v)];
+  S.rel.cal = S.rel.dias[0].slice(0, 7); rdPanel(); drawRel(true);
 };
 ACT.relmotivo = (t) => { S.rel.motivo = t.dataset.v; drawRel(); };
 const FUNIL = ['interessado', 'proposta', 'venda'];
@@ -985,7 +1031,7 @@ function rloteFill() {
 }
 async function drawRel(fetchNew) {
   const box = $('#rbody'); if (!box) return;
-  if (fetchNew) { box.innerHTML = '<p class="muted">Carregando…</p>'; try { S.rel.d = await api('/relatorio?data=' + S.rel.data); } catch (e) { box.innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; return; } rsdrPanel(); rloteFill(); }
+  if (fetchNew) { box.innerHTML = '<p class="muted">Carregando…</p>'; try { S.rel.d = await api('/relatorio?datas=' + relDias().join(',')); } catch (e) { box.innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; return; } rsdrPanel(); rloteFill(); }
   const d = S.rel.d, mo = S.rel.motivo, sel = S.rel.sel.map(String), lo = S.rel.lote || '';
   const base = d.sdrs.filter((s) => !sel.length || sel.includes(String(s.id)));
   const list = lo ? base.map((s) => viewLote(s, lo)) : base;
@@ -995,7 +1041,7 @@ async function drawRel(fetchNew) {
   const fchips = `<div class="chips">${chips.map((c) => `<button class="fchip ${mo === c[0] ? 'on' : ''}" data-act="relmotivo" data-v="${c[0]}">${esc(c[1])} <b>${cnt(c[0])}</b></button>`).join('')}</div>`;
   const card = (s) => {
     const fil = filtraMotivo(s.atividades, mo).slice().reverse();
-    return `<div class="card sdr-card" style="margin-top:12px"><div class="row sp"><div><b>${esc(s.nome)}</b><div class="tiny muted">${s.atividades.length ? `Das ${s.primeira || '—'} às ${s.ultima || '—'} · ${s.contatos} contatos` : 'Sem atividade neste dia'}</div>${lo ? '' : listasLinha(s)}</div>${s.atrasados ? `<span class="chip bad">${s.atrasados} atrasados</span>` : ''}</div>
+    return `<div class="card sdr-card" style="margin-top:12px"><div class="row sp"><div><b>${esc(s.nome)}</b><div class="tiny muted">${s.atividades.length ? (d.multi ? `${s.contatos} contatos · ${s.atividades.length} atividades` : `Das ${s.primeira || '—'} às ${s.ultima || '—'} · ${s.contatos} contatos`) : (d.multi ? 'Sem atividade no período' : 'Sem atividade neste dia')}</div>${lo ? '' : listasLinha(s)}</div>${s.atrasados ? `<span class="chip bad">${s.atrasados} atrasados</span>` : ''}</div>
     <div class="nums"><div><b>${num(s.ligacoes)}</b><span>ligações</span></div><div><b>${num(s.whatsapp)}</b><span>WhatsApp</span></div><div><b>${num(s.interessados)}</b><span>interessados</span></div><div><b>${num(s.vendas)}</b><span>vendas</span></div></div>
     ${mo ? (fil.length ? `<div class="sec-title">${fil.length} ${FUNIL.includes(mo) ? 'contato' : 'atividade'}${fil.length === 1 ? '' : 's'} no filtro</div>${fil.map((a) => atvRow({ ...a, sdr_nome: s.nome })).join('')}` : '<p class="muted small" style="margin-top:10px">Nada neste filtro.</p>')
     : `${s.vendas_lista.length ? `<div class="sec-title">Vendas</div>${s.vendas_lista.map((a) => atvRow({ ...a, sdr_nome: s.nome })).join('')}` : ''}
