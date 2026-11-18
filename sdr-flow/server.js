@@ -77,6 +77,15 @@ CREATE TABLE IF NOT EXISTS interacoes (
 CREATE INDEX IF NOT EXISTS idx_int_user ON interacoes(user_id, criado_em);
 CREATE INDEX IF NOT EXISTS idx_int_lead ON interacoes(lead_id);
 CREATE INDEX IF NOT EXISTS idx_int_data ON interacoes(criado_em);
+CREATE TABLE IF NOT EXISTS movimentos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id INTEGER NOT NULL,
+  de_id INTEGER,
+  para_id INTEGER,
+  por_id INTEGER,
+  criado_em INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mov_lead ON movimentos(lead_id);
 CREATE TABLE IF NOT EXISTS mensagens (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   titulo TEXT NOT NULL,
@@ -291,29 +300,68 @@ function normalizePhone(raw) {
 const titleCase = (s) => String(s || '').toLowerCase().replace(/(^|\s|-)([a-zà-ú])/g, (m, a, b) => a + b.toUpperCase()).trim();
 const inList = (n) => Array(n).fill('?').join(',');
 
+const VIRGEM = (p) => `${p}tentativas=0 AND NOT EXISTS (SELECT 1 FROM interacoes x WHERE x.lead_id=${p || 'leads.'}id AND x.canal<>'nota')`;
+const ULT_TAB = (p) => `(SELECT x.resultado FROM interacoes x WHERE x.lead_id=${p || 'leads.'}id AND x.canal<>'nota' ORDER BY x.criado_em DESC, x.id DESC LIMIT 1)`;
+async function gravarMovimentos(lista, porId) {
+  // lista: [{id, de, para}] — troca o responsável e registra no histórico do contato
+  const t = now(), stmts = [];
+  for (const m of lista) {
+    stmts.push(['UPDATE leads SET owner_id=? WHERE id=?', [m.para, m.id]]);
+    stmts.push(['INSERT INTO movimentos (lead_id, de_id, para_id, por_id, criado_em) VALUES (?,?,?,?,?)', [m.id, m.de ?? null, m.para, porId, t]]);
+  }
+  for (let i = 0; i < stmts.length; i += 400) await batch(stmts.slice(i, i + 400));
+}
+
 app.post('/api/leads/importar', auth(['gestor']), wrap(async (req, res) => {
-  const { leads, distribuir, lote } = req.body || {};
+  const { leads, distribuir, lote, mover_dup } = req.body || {};
   if (!Array.isArray(leads) || !leads.length) return res.status(400).json({ erro: 'Nenhum contato para importar' });
   const ids = Array.isArray(distribuir) ? distribuir.map(Number).filter(Boolean) : [];
   const sdrs = ids.length
     ? (await all(`SELECT id FROM users WHERE ativo=1 AND papel='sdr' AND id IN (${inList(ids.length)}) ORDER BY id`, ids)).map((r) => r.id)
     : [];
+  let destDup = null;
+  if (mover_dup) {
+    const d = await get(`SELECT id, nome FROM users WHERE id=? AND ativo=1 AND papel='sdr'`, [Number(mover_dup)]);
+    if (!d) return res.status(400).json({ erro: 'SDR escolhida para os duplicados é inválida' });
+    destDup = d;
+  }
   const existentes = new Set((await all('SELECT telefone FROM leads')).map((r) => r.telefone));
   const loteNome = (lote && String(lote).trim()) || 'Importação ' + new Date(now() + TZ_OFFSET).toISOString().slice(0, 16).replace('T', ' ');
-  const out = { importados: 0, duplicados: 0, invalidos: 0 };
-  const stmts = [];
+  const out = { importados: 0, duplicados: 0, invalidos: 0, repetidos_arquivo: 0 };
+  const stmts = [], dups = [], dupArq = [], novos = new Set();
   let rr = 0;
   for (const l of leads) {
     const tel = normalizePhone(l.telefone);
     if (!tel) { out.invalidos++; continue; }
-    if (existentes.has(tel)) { out.duplicados++; continue; }
-    existentes.add(tel);
+    if (existentes.has(tel)) { out.duplicados++; (novos.has(tel) ? dupArq : dups).push({ tel, nome: titleCase(l.nome) || '' }); continue; }
+    existentes.add(tel); novos.add(tel);
     const owner = sdrs.length ? sdrs[rr++ % sdrs.length] : null;
     stmts.push([`INSERT INTO leads (nome, telefone, cidade, consumo, email, obs, owner_id, lote, criado_em, empresa, cnpj, ramo, porte, alt_tel) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [titleCase(l.nome) || 'Cliente', tel, l.cidade ? titleCase(l.cidade) : null, l.consumo ? String(l.consumo).trim() : null, l.email || null, l.obs || null, owner, loteNome, now(), l.empresa || null, l.cnpj || null, l.ramo || null, l.porte || null, l.alt_tel || null]]);
     out.importados++;
   }
   for (let i = 0; i < stmts.length; i += 400) await batch(stmts.slice(i, i + 400));
+  // relatório dos duplicados: onde estão, com quem e em que situação
+  const tels = [...new Set(dups.map((d) => d.tel))], info = new Map();
+  for (let i = 0; i < tels.length; i += 400) {
+    const p = tels.slice(i, i + 400);
+    for (const r of await all(`SELECT l.id, l.telefone, l.nome, l.lote, l.status, l.tentativas, l.owner_id, o.nome owner_nome,
+        ${ULT_TAB('l.')} ult_tab, (${VIRGEM('l.')}) virgem
+      FROM leads l LEFT JOIN users o ON o.id=l.owner_id WHERE l.telefone IN (${inList(p.length)})`, p)) info.set(r.telefone, r);
+  }
+  const lista = [];
+  for (const d of dups) {
+    const r = info.get(d.tel); if (!r) continue;
+    lista.push({ id: r.id, telefone: d.tel, nome_arquivo: d.nome, nome: r.nome, lote: r.lote || 'Sem lista', responsavel: r.owner_nome || 'Sem dono', owner_id: r.owner_id, status: STATUS_TXT[r.status] || r.status, tentativas: r.tentativas, ultima_tab: r.ult_tab ? (RES_TXT[r.ult_tab] || r.ult_tab) : '', virgem: !!r.virgem });
+  }
+  out.dup_lista = lista.slice(0, 5000);
+  out.dup_virgens = lista.filter((d) => d.virgem).length;
+  out.repetidos_arquivo = dupArq.length; out.duplicados_banco = lista.length;
+  if (destDup) {
+    const mov = lista.filter((d) => d.virgem && d.owner_id !== destDup.id).map((d) => ({ id: d.id, de: d.owner_id, para: destDup.id }));
+    await gravarMovimentos(mov, req.user.id);
+    out.dup_movidos = mov.length; out.dup_movidos_para = destDup.nome;
+  }
   res.json(out);
 }));
 
@@ -330,15 +378,28 @@ app.post('/api/leads/distribuir', auth(['gestor']), wrap(async (req, res) => {
   res.json({ distribuidos: leads.length });
 }));
 
+// filtros de contatos (busca, status, lista, SDR, tentativas, última tabulação). p = '' (tabela leads) ou 'l.'
+function leadConds(f, p = '') {
+  const cond = [], args = [];
+  if (f.owner === 'sem') cond.push(`${p}owner_id IS NULL`);
+  else if (f.owner) { cond.push(`${p}owner_id = ?`); args.push(Number(f.owner)); }
+  if (f.status) { cond.push(`${p}status = ?`); args.push(String(f.status)); }
+  if (f.lote === '__none') cond.push(`${p}lote IS NULL`);
+  else if (f.lote) { cond.push(`${p}lote = ?`); args.push(String(f.lote)); }
+  if (f.q) { cond.push(`(${p}nome LIKE ? OR ${p}telefone LIKE ? OR ${p}cidade LIKE ?)`); const q = '%' + f.q + '%'; args.push(q, q, q); }
+  const t = String(f.tent ?? '');
+  if (t === '0') cond.push(`(${VIRGEM(p)})`);
+  else if (t === '1' || t === '2') { cond.push(`${p}tentativas = ?`); args.push(Number(t)); }
+  else if (t === '3') cond.push(`${p}tentativas >= 3`);
+  if (f.tab === '__nenhuma') cond.push(`${ULT_TAB(p)} IS NULL`);
+  else if (f.tab) { cond.push(`${ULT_TAB(p)} = ?`); args.push(String(f.tab)); }
+  return { cond, args };
+}
+
 app.get('/api/leads', auth(), wrap(async (req, res) => {
-  const { status, owner, q, lote, limit = 50, offset = 0 } = req.query;
-  const cond = []; const args = [];
+  const { limit = 50, offset = 0 } = req.query;
+  const { cond, args } = leadConds(req.user.papel === 'sdr' ? { ...req.query, owner: '' } : req.query, 'l.');
   if (req.user.papel === 'sdr') { cond.push('l.owner_id = ?'); args.push(req.user.id); }
-  else if (owner === 'sem') cond.push('l.owner_id IS NULL');
-  else if (owner) { cond.push('l.owner_id = ?'); args.push(Number(owner)); }
-  if (status) { cond.push('l.status = ?'); args.push(status); }
-  if (lote) { cond.push('l.lote = ?'); args.push(lote); }
-  if (q) { cond.push('(l.nome LIKE ? OR l.telefone LIKE ? OR l.cidade LIKE ?)'); const s = '%' + q + '%'; args.push(s, s, s); }
   const w = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
   const [tot, rows] = await Promise.all([
     get(`SELECT COUNT(*) c FROM leads l ${w}`, args),
@@ -352,11 +413,17 @@ app.get('/api/leads/:id', auth(), wrap(async (req, res) => {
   if (!l) return res.status(404).json({ erro: 'Não encontrado' });
   if (req.user.papel === 'sdr' && l.owner_id !== req.user.id) return res.status(403).json({ erro: 'Sem permissão' });
   const hist = await all(`SELECT i.*, u.nome AS user_nome FROM interacoes i JOIN users u ON u.id=i.user_id WHERE i.lead_id=? ORDER BY i.criado_em DESC`, [l.id]);
+  const movs = await all(`SELECT m.id, m.criado_em, d.nome de_nome, p.nome para_nome, g.nome user_nome FROM movimentos m LEFT JOIN users d ON d.id=m.de_id LEFT JOIN users p ON p.id=m.para_id LEFT JOIN users g ON g.id=m.por_id WHERE m.lead_id=?`, [l.id]);
+  for (const m of movs) hist.push({ canal: 'movimento', resultado: 'movido', criado_em: m.criado_em, user_nome: m.user_nome || '', nota: `Movido de ${m.de_nome || 'sem dono'} para ${m.para_nome || 'sem dono'}` });
+  hist.sort((a, b) => b.criado_em - a.criado_em);
   res.json({ lead: l, historico: hist });
 }));
 
 app.put('/api/leads/:id/atribuir', auth(['gestor']), wrap(async (req, res) => {
-  await run('UPDATE leads SET owner_id=? WHERE id=?', [req.body.owner_id ? Number(req.body.owner_id) : null, Number(req.params.id)]);
+  const id = Number(req.params.id), novo = req.body.owner_id ? Number(req.body.owner_id) : null;
+  const l = await get('SELECT owner_id FROM leads WHERE id=?', [id]);
+  if (!l) return res.status(404).json({ erro: 'Não encontrado' });
+  if ((l.owner_id ?? null) !== novo) await batch([['UPDATE leads SET owner_id=? WHERE id=?', [novo, id]], ['INSERT INTO movimentos (lead_id, de_id, para_id, por_id, criado_em) VALUES (?,?,?,?,?)', [id, l.owner_id ?? null, novo, req.user.id, now()]]]);
   res.json({ ok: true });
 }));
 
@@ -381,12 +448,16 @@ async function excluirLeads({ where, args, trabalhados, confirmarVendas, simular
   if (!alvo) return { ...base, excluidos: 0, interacoes_excluidas: 0 };
   if (trabalhados) {
     await batch([
+      [`DELETE FROM movimentos WHERE lead_id IN (SELECT id FROM leads WHERE ${where})`, args],
       [`DELETE FROM interacoes WHERE lead_id IN (SELECT id FROM leads WHERE ${where})`, args],
       [`DELETE FROM leads WHERE ${where}`, args]
     ]);
     return { ...base, excluidos: c.total, interacoes_excluidas: c.interacoes };
   }
-  await run(`DELETE FROM leads WHERE (${where}) AND ${LIMPO}`, args);
+  await batch([
+    [`DELETE FROM movimentos WHERE lead_id IN (SELECT id FROM leads WHERE (${where}) AND ${LIMPO})`, args],
+    [`DELETE FROM leads WHERE (${where}) AND ${LIMPO}`, args]
+  ]);
   return { ...base, excluidos: c.limpos, interacoes_excluidas: 0 };
 }
 const respostaExclusao = (res, r) => {
@@ -423,15 +494,57 @@ app.post('/api/leads/excluir', auth(['gestor']), wrap(async (req, res) => {
     for (const p of partes) { const r = await excluirLeads({ where: `id IN (${inList(p.length)})`, args: p, trabalhados, confirmarVendas: true }); ex += r.excluidos; it += r.interacoes_excluidas; }
     return res.json({ ...tot, excluidos: ex, interacoes_excluidas: it });
   }
-  const f = filtro || {};
-  const cond = []; const args = [];
-  if (f.lote) { cond.push('lote = ?'); args.push(String(f.lote)); }
-  if (f.status) { cond.push('status = ?'); args.push(String(f.status)); }
-  if (f.owner === 'sem') cond.push('owner_id IS NULL');
-  else if (f.owner) { cond.push('owner_id = ?'); args.push(Number(f.owner)); }
-  if (f.q) { cond.push('(nome LIKE ? OR telefone LIKE ? OR cidade LIKE ?)'); const q = '%' + f.q + '%'; args.push(q, q, q); }
-  if (!cond.length) return res.status(400).json({ erro: 'Escolha um filtro (lista, status, SDR ou busca) ou selecione contatos' });
+  const { cond, args } = leadConds(filtro || {});
+  if (!cond.length) return res.status(400).json({ erro: 'Escolha um filtro (lista, status, SDR, tentativas, tabulação ou busca) ou selecione contatos' });
   respostaExclusao(res, await excluirLeads({ where: cond.join(' AND '), args, trabalhados, confirmarVendas, simular: !!simular }));
+}));
+
+
+/* ---------- mover contatos entre SDRs (gestor) ----------
+   Só troca o responsável; histórico, tentativas e anotações ficam. Cada troca vira um registro "movido de X para Y". */
+app.post('/api/leads/mover', auth(['gestor']), wrap(async (req, res) => {
+  const { ids, filtro, destinos, modo, evitar_quem_ligou, simular } = req.body || {};
+  const dest = [...new Set((destinos || []).map(Number).filter(Boolean))];
+  if (!dest.length) return res.status(400).json({ erro: 'Escolha pelo menos um SDR de destino' });
+  if (modo === 'um' && dest.length !== 1) return res.status(400).json({ erro: 'No modo "todos para um SDR" escolha apenas um destino' });
+  const sdrs = await all(`SELECT id, nome FROM users WHERE ativo=1 AND papel='sdr' AND id IN (${inList(dest.length)}) ORDER BY nome`, dest);
+  if (sdrs.length !== dest.length) return res.status(400).json({ erro: 'SDR de destino inválido ou inativo' });
+  let w, a;
+  if (Array.isArray(ids)) {
+    const lista = [...new Set(ids.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+    if (!lista.length) return res.status(400).json({ erro: 'Nenhum contato selecionado' });
+    if (lista.length > 5000) return res.status(400).json({ erro: 'Selecione no máximo 5000 contatos por vez' });
+    w = `l.id IN (${inList(lista.length)})`; a = lista;
+  } else {
+    const { cond, args } = leadConds(filtro || {}, 'l.');
+    if (!cond.length) return res.status(400).json({ erro: 'Aplique um filtro ou selecione contatos' });
+    w = cond.join(' AND '); a = args;
+  }
+  const leads = await all(`SELECT l.id, l.owner_id FROM leads l WHERE ${w} ORDER BY l.id`, a);
+  const trabalhou = new Map();
+  if (evitar_quem_ligou && leads.length) {
+    for (const r of await all(`SELECT DISTINCT i.lead_id, i.user_id FROM interacoes i JOIN leads l ON l.id=i.lead_id WHERE i.canal<>'nota' AND ${w}`, a)) {
+      if (!trabalhou.has(r.lead_id)) trabalhou.set(r.lead_id, new Set()); trabalhou.get(r.lead_id).add(r.user_id);
+    }
+  }
+  const cont = new Map(sdrs.map((s) => [s.id, 0])), plano = [];
+  const out = { total: leads.length, movidos: 0, ja_era_dono: 0, ja_ligou: 0, por_sdr: [] };
+  for (const l of leads) {
+    const elegiveis = sdrs.filter((s) => s.id !== l.owner_id && !(trabalhou.get(l.id) || new Set()).has(s.id));
+    if (!elegiveis.length) {
+      // por que ficou de fora
+      if (sdrs.some((s) => s.id === l.owner_id)) out.ja_era_dono++; else out.ja_ligou++;
+      continue;
+    }
+    const s = elegiveis.reduce((m, x) => (cont.get(x.id) < cont.get(m.id) ? x : m), elegiveis[0]);
+    cont.set(s.id, cont.get(s.id) + 1);
+    plano.push({ id: l.id, de: l.owner_id, para: s.id });
+  }
+  out.movidos = plano.length;
+  out.por_sdr = sdrs.map((s) => ({ id: s.id, nome: s.nome, qtd: cont.get(s.id) }));
+  if (simular) return res.json({ ...out, simulado: true });
+  await gravarMovimentos(plano, req.user.id);
+  res.json(out);
 }));
 
 const ENCERRADOS = ['venda', 'perdido', 'invalido'];
@@ -826,7 +939,14 @@ app.get('/api/listas', auth(['gestor']), wrap(async (req, res) => {
       sdrs: [...sd.values()].map((o) => ({ nome: o.nome, ligacoes: o.ligacoes, whatsapp: o.whatsapp, contatos: o.leads.size })).sort((a, b) => b.contatos - a.contatos)
     });
   }
-  out.sort((a, b) => b.ultima - a.ultima);
+  const vistos = new Set(out.map((o) => o.lote));
+  for (const x of leads) {
+    if (vistos.has(x.lote)) continue; vistos.add(x.lote);
+    const st = {}; let total = 0;
+    for (const y of leads) if (y.lote === x.lote) { st[y.status] = y.c; total += y.c; }
+    out.push({ lote: x.lote, nome: x.lote || 'Sem lista', total, status: st, ...ZERO(), trabalhados: 0, notas: 0, primeira: null, ultima: null, tabulacoes: {}, sdrs: [] });
+  }
+  out.sort((a, b) => (b.ultima || 0) - (a.ultima || 0) || b.total - a.total);
   res.json(out);
 }));
 const fmtTel = (v) => { let d = String(v || '').replace(/\D/g, ''); if (!d) return ''; if (d.startsWith('55') && (d.length === 12 || d.length === 13)) d = d.slice(2); return d.length === 11 ? `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}` : d.length === 10 ? `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}` : String(v); };
@@ -835,9 +955,11 @@ const csvCell = (v) => { let s = String(v ?? ''); if (/^[=+\-@]/.test(s)) s = "'
 const slug = (s) => String(s || 'sem-lista').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase().slice(0, 40) || 'lista';
 app.get('/api/listas/export', auth(['gestor']), wrap(async (req, res) => {
   const q = req.query, modo = q.modo === 'atividades' ? 'atividades' : 'contatos';
-  const [ini, fim] = faixa(q);
+  // exportação por contato é sempre completa: todos os contatos da lista (inclusive os nunca ligados) e o histórico inteiro
+  const [ini, fim] = modo === 'contatos' ? [0, now() + DAY] : faixa(q);
   const [lc, la] = loteCond(q.lote);
-  const todos = q.todos === '1';
+  const todos = modo === 'contatos' || q.todos === '1';
+  const semCpc = q.semcpc === '1';
   const ints = await all(`SELECT i.*, u.nome sdr FROM interacoes i JOIN users u ON u.id=i.user_id JOIN leads l ON l.id=i.lead_id
     WHERE ${lc} AND i.criado_em>=? AND i.criado_em<=? ORDER BY i.criado_em`, [...la, ini, fim]);
   const leads = await all(`SELECT l.*, o.nome owner_nome FROM leads l LEFT JOIN users o ON o.id=l.owner_id
@@ -848,12 +970,15 @@ app.get('/api/listas/export', auth(['gestor']), wrap(async (req, res) => {
   const lines = [];
   if (modo === 'contatos') {
     lines.push([...H_CLI, 'Tentativas', 'Último contato', 'Próximo retorno', 'Valor da venda', 'Última tabulação', 'Última anotação', 'Quem ligou', 'Quem trabalhou', 'Ligações', 'WhatsApp', 'Histórico completo'].map(csvCell).join(';'));
+    const SEMCPC_TAB = ['nao_atendeu', 'caixa_postal', 'enviado'], CPC = ['falou', 'respondeu', 'interessado', 'proposta', 'venda', 'sem_interesse', 'invalido'];
     for (const l of leads) {
       const h = byLead.get(l.id) || [], w = h.filter((r) => r.canal !== 'nota');
+      // "sem CPC": já tentou, nunca falou com a pessoa; última tabulação = caixa postal, não atendeu ou mensagem sem resposta
+      if (semCpc && !(w.length && !w.some((r) => CPC.includes(r.resultado)) && SEMCPC_TAB.includes(w[w.length - 1].resultado) && !['venda', 'perdido', 'invalido'].includes(l.status))) continue;
       const ult = w[w.length - 1], notas = h.filter((r) => r.nota);
       const uniq = (a) => [...new Set(a)].join(', ');
       lines.push([...cli(l), l.tentativas, fdh(l.ultimo_contato), fdh(l.followup_em), l.valor_venda,
-        ult ? RES_TXT[ult.resultado] || ult.resultado : '', notas.length ? notas[notas.length - 1].nota : '',
+        ult ? RES_TXT[ult.resultado] || ult.resultado : 'Sem tentativa', notas.length ? notas[notas.length - 1].nota : '',
         uniq(h.filter((r) => r.canal === 'ligacao').map((r) => r.sdr)), uniq(h.map((r) => r.sdr)),
         h.filter((r) => r.canal === 'ligacao').length, h.filter((r) => r.canal === 'whatsapp').length,
         h.map((r) => `${fdh(r.criado_em)} · ${r.sdr} · ${CANAL_TXT[r.canal] || r.canal} · ${RES_TXT[r.resultado] || r.resultado}${r.valor ? ' · ' + brl(r.valor) : ''}${r.nota ? ' · ' + r.nota : ''}`).join(' | ')
@@ -866,7 +991,7 @@ app.get('/api/listas/export', auth(['gestor']), wrap(async (req, res) => {
       lines.push([fdh(r.criado_em), r.sdr, CANAL_TXT[r.canal] || r.canal, RES_TXT[r.resultado] || r.resultado, r.origem, r.valor, r.nota, ...cli(l)].map(csvCell).join(';')); }
   }
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="lista-${slug(q.lote === '__all' || !q.lote ? 'todas' : q.lote === '__none' ? 'sem-lista' : q.lote)}-${modo}.csv"`);
+  res.setHeader('Content-Disposition', `attachment; filename="lista-${slug(q.lote === '__all' || !q.lote ? 'todas' : q.lote === '__none' ? 'sem-lista' : q.lote)}-${modo}${semCpc ? '-sem-cpc' : ''}.csv"`);
   res.send('\uFEFF' + lines.join('\r\n'));
 }));
 
