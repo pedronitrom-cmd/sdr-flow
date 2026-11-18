@@ -26,7 +26,7 @@ const ic = (n, s = 20) => `<svg class="ic" width="${s}" height="${s}" viewBox="0
 
 let TOKEN = null;
 try { TOKEN = localStorage.getItem('sdrflow_token'); } catch (e) { /* sem storage */ }
-const S = { sel: new Set(), del: null, lote: '', lotes: [], user: null, config: {}, view: '', skip: [], msgs: [], tplId: null, varIdx: 0, waWait: 0, stats: null, fila: null, counts: null, periodo: 'hoje', timer: null, imp: null, users: null, lf: { q: '', status: '', owner: '', lote: '', offset: 0 } };
+const S = { sel: new Set(), del: null, lote: '', lotes: [], user: null, config: {}, view: '', skip: [], msgs: [], tplId: null, varIdx: 0, waWait: 0, stats: null, fila: null, counts: null, periodo: 'hoje', timer: null, imp: null, users: null, mv: null, dupInfo: null, lf: { q: '', status: '', owner: '', lote: '', tent: '', tab: '', offset: 0 } };
 const VIEWS = {};
 const ACT = {};
 
@@ -497,8 +497,10 @@ VIEWS.contatos = async () => {
   <div class="card" style="margin-top:14px">
     <div class="row wrap" style="gap:8px"><input type="search" id="lq" placeholder="Buscar nome, telefone ou cidade" value="${esc(S.lf.q)}" style="flex:1;min-width:180px">
       <select id="ls" style="width:auto"><option value="">Todos os status</option>${Object.keys(STATUS).map((k) => `<option value="${k}" ${S.lf.status === k ? 'selected' : ''}>${STATUS[k][0]}</option>`).join('')}</select>
-      <select id="lt" style="width:auto"><option value="">Todas as campanhas</option></select>
-      ${g ? '<select id="lo" style="width:auto"><option value="">Todas as SDRs</option><option value="sem">Sem dono</option></select>' : ''}</div>
+      <select id="lt" style="width:auto"><option value="">Todas as listas</option></select>
+      ${g ? '<select id="lo" style="width:auto"><option value="">Todas as SDRs</option><option value="sem">Sem dono</option></select>' : ''}
+      ${g ? `<select id="lten" style="width:auto"><option value="">Qualquer nº de tentativas</option>${[['0', 'Sem tentativa (virgem)'], ['1', '1 tentativa'], ['2', '2 tentativas'], ['3', '3 ou mais tentativas']].map(([v, l]) => `<option value="${v}" ${S.lf.tent === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <select id="ltab" style="width:auto"><option value="">Qualquer última tabulação</option><option value="__nenhuma" ${S.lf.tab === '__nenhuma' ? 'selected' : ''}>Nunca tabulado</option>${MOTIVOS.map((m) => `<option value="${m[0]}" ${S.lf.tab === m[0] ? 'selected' : ''}>${m[1]}</option>`).join('')}</select>` : ''}</div>
     <div id="ll" style="margin-top:8px"></div></div>`;
   if (g) { drawImport(); drawDist(); drawLotes(); const us = S.users || (S.users = await api('/usuarios')); $('#lo').innerHTML += us.filter((u) => u.papel === 'sdr' && u.ativo).map((u) => `<option value="${u.id}" ${String(S.lf.owner) === String(u.id) ? 'selected' : ''}>${esc(u.nome)}</option>`).join(''); if (S.lf.owner) $('#lo').value = S.lf.owner; }
   api('/lotes').then((ls) => { const sel = $('#lt'); if (!sel) return; sel.innerHTML += ls.map((x) => `<option value="${esc(x.lote)}" ${S.lf.lote === x.lote ? 'selected' : ''}>${esc(x.lote)} (${x.total})</option>`).join(''); });
@@ -507,11 +509,12 @@ VIEWS.contatos = async () => {
   $('#lq').addEventListener('input', (e) => { clearTimeout(t); t = setTimeout(() => { S.lf.q = e.target.value; S.lf.offset = 0; loadLeads(); }, 300); });
   $('#ls').addEventListener('change', (e) => { S.lf.status = e.target.value; S.lf.offset = 0; loadLeads(); });
   if (g) $('#lo').addEventListener('change', (e) => { S.lf.owner = e.target.value; S.lf.offset = 0; loadLeads(); });
+  if (g) { $('#lten').addEventListener('change', (e) => { S.lf.tent = e.target.value; S.lf.offset = 0; loadLeads(); }); $('#ltab').addEventListener('change', (e) => { S.lf.tab = e.target.value; S.lf.offset = 0; loadLeads(); }); }
   loadLeads();
 };
 async function loadLeads(append) {
   const f = S.lf, p = new URLSearchParams({ limit: 40, offset: f.offset });
-  if (f.q) p.set('q', f.q); if (f.status) p.set('status', f.status); if (f.owner) p.set('owner', f.owner); if (f.lote) p.set('lote', f.lote);
+  if (f.q) p.set('q', f.q); if (f.status) p.set('status', f.status); if (f.owner) p.set('owner', f.owner); if (f.lote) p.set('lote', f.lote); if (f.tent) p.set('tent', f.tent); if (f.tab) p.set('tab', f.tab);
   const r = await api('/leads?' + p);
   const g = S.user.papel === 'gestor';
   const rows = r.leads.map((l) => {
@@ -520,11 +523,12 @@ async function loadLeads(append) {
     return g ? `<div class="list-item" style="cursor:default"><label class="selwrap"><input type="checkbox" class="selbox" data-id="${l.id}"></label><div class="open-area" data-act="open" data-id="${l.id}">${inner}</div></div>`
       : `<div class="list-item" data-act="open" data-id="${l.id}">${inner}</div>`;
   }).join('');
+  S.lfTotal = r.total;
   const box = $('#ll'); if (!box) return;
   const more = f.offset + 40 < r.total ? '<button class="btn sec block" style="margin-top:10px" data-act="more">Carregar mais</button>' : '';
   const html = (append ? box.dataset.html || '' : '') + rows;
   box.dataset.html = html;
-  const tools = g && html ? `<div class="row wrap seltools"><button class="btn sec sm" data-act="selall">Selecionar visíveis</button><button class="btn sec sm hide" id="btnselclr" data-act="selclr">Limpar seleção</button><button class="btn danger sm" id="btnseldel" data-act="delsel" disabled>Excluir selecionados</button><button class="btn danger sm" data-act="delfiltro">Excluir todos do filtro</button></div>` : '';
+  const tools = g && html ? `<div class="row wrap seltools"><button class="btn sec sm" data-act="selall">Selecionar visíveis</button><button class="btn sec sm hide" id="btnselclr" data-act="selclr">Limpar seleção</button><button class="btn sm" id="btnselmov" data-act="movsel" disabled>Mover selecionados</button><button class="btn sm" data-act="movfiltro">Mover todos do filtro</button><button class="btn danger sm" id="btnseldel" data-act="delsel" disabled>Excluir selecionados</button><button class="btn danger sm" data-act="delfiltro">Excluir todos do filtro</button></div>` : '';
   box.innerHTML = `<div class="muted tiny" style="margin:4px 0">${num(r.total)} contato${r.total === 1 ? '' : 's'}</div>${tools}${html || '<p class="muted">Nenhum contato encontrado.</p>'}${more}`;
   box.querySelectorAll('.selbox').forEach((c) => { c.checked = S.sel.has(Number(c.dataset.id)); });
   updSel();
@@ -537,7 +541,7 @@ S.ints = {};
 const editBtn = (h) => { if (!h.id || S.user.papel !== 'gestor') return ''; S.ints[h.id] = h; return ` <button class="lnk" data-act="editint" data-id="${h.id}">Editar</button>`; };
 function histHtml(list) {
   if (!list || !list.length) return '<p class="muted small">Nenhuma interação ainda.</p>';
-  return `<div class="hist">${list.map((h) => `<div class="h ${h.resultado === 'venda' ? 'venda' : ''}"><b>${CANAL_L[h.canal] || h.canal}</b> · ${RES_LABEL[h.resultado] || h.resultado}${h.valor ? ' · <b>' + money(h.valor) + '</b>' : ''}${h.origem === 'followup' ? ' <span class="chip">retorno</span>' : ''}
+  return `<div class="hist">${list.map((h) => h.canal === 'movimento' ? `<div class="h"><b>↔ ${esc(h.nota)}</b><div class="muted tiny">${h.user_nome ? 'por ' + esc(h.user_nome) + ' · ' : ''}${fdt(h.criado_em)}</div></div>` : `<div class="h ${h.resultado === 'venda' ? 'venda' : ''}"><b>${CANAL_L[h.canal] || h.canal}</b> · ${RES_LABEL[h.resultado] || h.resultado}${h.valor ? ' · <b>' + money(h.valor) + '</b>' : ''}${h.origem === 'followup' ? ' <span class="chip">retorno</span>' : ''}
     <div class="muted tiny">${esc(h.user_nome || h.sdr_nome || '')} · ${fdt(h.criado_em)}${editBtn(h)}</div>${h.nota ? `<div class="nota">${esc(h.nota)}</div>` : ''}</div>`).join('')}</div>`;
 }
 function leadInfo(l) {
@@ -574,7 +578,8 @@ async function drawLotes() {
       <button class="btn danger sm" data-act="dellote" data-modo="tudo" data-lote="${esc(x.lote)}">Tudo</button></div>`).join('')}</details>`;
 }
 function updSel() {
-  const n = S.sel.size, b = $('#btnseldel'), c = $('#btnselclr');
+  const n = S.sel.size, b = $('#btnseldel'), c = $('#btnselclr'), mv = $('#btnselmov');
+  if (mv) { mv.disabled = !n; mv.textContent = n ? `Mover selecionados (${num(n)})` : 'Mover selecionados'; }
   if (b) { b.disabled = !n; b.textContent = n ? `Excluir selecionados (${num(n)})` : 'Excluir selecionados'; }
   if (c) c.classList.toggle('hide', !n);
 }
@@ -637,15 +642,21 @@ ACT.delsel = () => {
   const ids = [...S.sel]; if (!ids.length) return;
   abrirExclusao({ titulo: 'Excluir contatos selecionados', desc: `${num(ids.length)} selecionado${ids.length === 1 ? '' : 's'}`, tr: false, mk: (tr) => ({ path: '/leads/excluir', body: { ids, incluir_trabalhados: tr } }) });
 };
+function filtroAtual() {
+  const f = S.lf, filtro = {}, partes = [];
+  if (f.q) { filtro.q = f.q; partes.push('busca: “' + f.q + '”'); }
+  if (f.status) { filtro.status = f.status; partes.push('status: ' + ((STATUS[f.status] || [f.status])[0])); }
+  if (f.owner) { filtro.owner = f.owner; partes.push(f.owner === 'sem' ? 'sem dono' : 'SDR: ' + (((S.users || []).find((u) => String(u.id) === String(f.owner)) || {}).nome || f.owner)); }
+  if (f.lote) { filtro.lote = f.lote; partes.push('lista: ' + f.lote); }
+  if (f.tent !== '' && f.tent !== undefined) { filtro.tent = f.tent; partes.push(({ 0: 'sem tentativa', 1: '1 tentativa', 2: '2 tentativas', 3: '3+ tentativas' })[f.tent]); }
+  if (f.tab) { filtro.tab = f.tab; partes.push('última tabulação: ' + (f.tab === '__nenhuma' ? 'nunca tabulado' : (RES_LABEL[f.tab] || f.tab))); }
+  return { filtro, partes };
+}
 ACT.delfiltro = () => {
   const f = S.lf, filtro = {};
-  if (f.q) filtro.q = f.q; if (f.status) filtro.status = f.status; if (f.owner) filtro.owner = f.owner; if (f.lote) filtro.lote = f.lote;
-  if (!Object.keys(filtro).length) { toast('Aplique um filtro (campanha, status, SDR ou busca) para excluir em massa', true); return; }
-  const partes = [];
-  if (f.lote) partes.push('lista: ' + f.lote);
-  if (f.status) partes.push('status: ' + ((STATUS[f.status] || [f.status])[0]));
-  if (f.owner) partes.push(f.owner === 'sem' ? 'sem dono' : 'SDR: ' + (((S.users || []).find((u) => String(u.id) === String(f.owner)) || {}).nome || f.owner));
-  if (f.q) partes.push('busca: “' + f.q + '”');
+  const filtro0 = filtroAtual(); Object.assign(filtro, filtro0.filtro);
+  if (!Object.keys(filtro).length) { toast('Aplique um filtro (lista, status, SDR, tentativas, tabulação ou busca) para excluir em massa', true); return; }
+  const partes = filtro0.partes;
   abrirExclusao({ titulo: 'Excluir todos os contatos do filtro', desc: partes.join(' · '), tr: false, mk: (tr) => ({ path: '/leads/excluir', body: { filtro, incluir_trabalhados: tr } }) });
 };
 document.addEventListener('change', (e) => {
@@ -655,6 +666,76 @@ document.addEventListener('change', (e) => {
   else if (t.id === 'dxv') validarExclusao();
 });
 document.addEventListener('input', (e) => { if (e.target && e.target.id === 'dxt') validarExclusao(); });
+
+/* ---------- mover contatos para outro SDR (gestor) ---------- */
+ACT.movsel = () => { const ids = [...S.sel]; if (!ids.length) return; abrirMover({ titulo: 'Mover contatos selecionados', desc: `${num(ids.length)} contato${ids.length === 1 ? '' : 's'} selecionado${ids.length === 1 ? '' : 's'}`, base: { ids }, qtd: ids.length }); };
+ACT.movfiltro = () => {
+  const f = filtroAtual();
+  if (!Object.keys(f.filtro).length) { toast('Aplique um filtro (lista, status, SDR, tentativas, tabulação ou busca) para mover em massa', true); return; }
+  abrirMover({ titulo: 'Mover todos os contatos do filtro', desc: f.partes.join(' · '), base: { filtro: f.filtro }, qtd: S.lfTotal });
+};
+async function abrirMover(cfg) {
+  const us = S.users || (S.users = await api('/usuarios'));
+  S.mv = { ...cfg, sdrs: us.filter((u) => u.papel === 'sdr' && u.ativo), sel: [], modo: 'dividir', evitar: true, prev: null, seq: 0 };
+  drawMover();
+}
+function mvDest() {
+  const m = S.mv;
+  if (m.modo === 'um') return `<select id="mvone"><option value="">Escolha o SDR</option>${m.sdrs.map((u) => `<option value="${u.id}" ${m.sel[0] === u.id ? 'selected' : ''}>${esc(u.nome)}</option>`).join('')}</select>`;
+  return `<div class="row" style="gap:6px;margin-bottom:6px"><button type="button" class="btn sec sm" data-act="chkall" data-sel="[data-mvsdr]" data-v="1">Marcar todos</button><button type="button" class="btn sec sm" data-act="chkall" data-sel="[data-mvsdr]" data-v="0">Desmarcar todos</button></div><div class="checks">${m.sdrs.map((u) => `<label><input type="checkbox" data-mvsdr="${u.id}" ${m.sel.includes(u.id) ? 'checked' : ''}> ${esc(u.nome)}</label>`).join('')}</div>`;
+}
+function drawMover() {
+  const m = S.mv;
+  modal(`<h2>${esc(m.titulo)}</h2><div class="muted small" style="margin-top:4px">${esc(m.desc)}</div>
+    <div class="small" style="margin-top:8px">O histórico (tentativas, tabulações e anotações) fica com o contato. Só muda o responsável, e cada troca fica registrada: “movido de X para Y”.</div>
+    <div class="sec-title">Como distribuir</div>
+    <label class="chk"><input type="radio" name="mvmodo" value="dividir" ${m.modo === 'dividir' ? 'checked' : ''}> <span>Dividir igualmente entre os SDRs marcados</span></label>
+    <label class="chk"><input type="radio" name="mvmodo" value="um" ${m.modo === 'um' ? 'checked' : ''}> <span>Todos para um SDR</span></label>
+    <div class="sec-title">${m.modo === 'um' ? 'SDR de destino' : 'SDRs de destino (marque um ou mais)'}</div>
+    <div id="mvdest">${m.sdrs.length ? mvDest() : '<div class="alert">Nenhum SDR ativo cadastrado.</div>'}</div>
+    <label class="chk" style="margin-top:10px"><input type="checkbox" id="mvevit" ${m.evitar ? 'checked' : ''}> <span>Não passar o contato para o SDR que já ligou (ou já trabalhou) nele</span></label>
+    <div id="mvprev" style="margin-top:12px"></div>
+    <div class="row" style="margin-top:16px"><button class="btn sec grow" data-act="close">Cancelar</button><button class="btn grow" id="mvgo" data-act="domover" disabled>Mover</button></div>`);
+  mvPreview();
+}
+async function mvPreview() {
+  const m = S.mv, box = $('#mvprev'), go = $('#mvgo'); if (!m || !box) return;
+  const seq = ++m.seq;
+  if (!m.sel.length) { box.innerHTML = `<div class="muted small">${m.qtd ? num(m.qtd) + ' contato' + (m.qtd === 1 ? '' : 's') + ' no total. ' : ''}Escolha o SDR de destino.</div>`; go.disabled = true; go.textContent = 'Mover'; return; }
+  box.innerHTML = '<div class="muted small">Calculando…</div>'; go.disabled = true;
+  let r; try { r = await api('/leads/mover', { method: 'POST', body: { ...m.base, destinos: m.sel, modo: m.modo, evitar_quem_ligou: m.evitar, simular: true } }); } catch (e) { if (seq === m.seq && $('#mvprev')) $('#mvprev').innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; return; }
+  if (seq !== m.seq || !$('#mvprev')) return;
+  m.prev = r;
+  const nomes = m.sdrs.filter((u) => m.sel.includes(u.id));
+  const avisos = [];
+  if (m.evitar && r.ja_ligou > 0) avisos.push(nomes.length === 1 ? `${num(r.ja_ligou)} contato${r.ja_ligou === 1 ? ' já foi ligado' : 's já foram ligados'} por ${esc(nomes[0].nome)} e não ${r.ja_ligou === 1 ? 'será movido' : 'serão movidos'} para ele.` : `${num(r.ja_ligou)} contato${r.ja_ligou === 1 ? '' : 's'} já ${r.ja_ligou === 1 ? 'foi trabalhado' : 'foram trabalhados'} por todos os SDRs marcados e ${r.ja_ligou === 1 ? 'fica' : 'ficam'} onde ${r.ja_ligou === 1 ? 'está' : 'estão'}.`);
+  if (r.ja_era_dono > 0) avisos.push(`${num(r.ja_era_dono)} já ${r.ja_era_dono === 1 ? 'é' : 'são'} do SDR de destino e ${r.ja_era_dono === 1 ? 'fica' : 'ficam'} como ${r.ja_era_dono === 1 ? 'está' : 'estão'}.`);
+  box.innerHTML = `<div class="card flat"><b>${num(r.total)} contato${r.total === 1 ? '' : 's'} encontrado${r.total === 1 ? '' : 's'} · ${num(r.movidos)} ser${r.movidos === 1 ? 'á movido' : 'ão movidos'}</b>
+    ${r.movidos ? `<div class="small" style="margin-top:6px">${r.por_sdr.map((x) => `${esc(x.nome)}: <b>${num(x.qtd)}</b>`).join(' · ')}</div>` : ''}
+    ${avisos.map((a) => `<div class="small" style="margin-top:6px;color:var(--bad)">⚠ ${a}</div>`).join('')}</div>`;
+  go.disabled = !r.movidos; go.textContent = r.movidos ? `Mover ${num(r.movidos)} contato${r.movidos === 1 ? '' : 's'}` : 'Nada para mover';
+}
+ACT.domover = async (t) => {
+  const m = S.mv; if (!m || !m.sel.length) return;
+  t.disabled = true;
+  try {
+    const r = await api('/leads/mover', { method: 'POST', body: { ...m.base, destinos: m.sel, modo: m.modo, evitar_quem_ligou: m.evitar } });
+    S.sel.clear(); S.mv = null;
+    modal(`<h2>Contatos movidos</h2><div class="alert ok" style="margin-top:10px"><b>${num(r.movidos)} contato${r.movidos === 1 ? '' : 's'} movido${r.movidos === 1 ? '' : 's'}.</b></div>
+      <div class="sec-title">Resumo por SDR</div>${r.por_sdr.map((x) => `<div class="row sp small" style="padding:4px 0"><span>${esc(x.nome)}</span><b>${num(x.qtd)}</b></div>`).join('')}
+      ${r.ja_ligou ? `<div class="small muted" style="margin-top:8px">${num(r.ja_ligou)} não ${r.ja_ligou === 1 ? 'foi movido porque o' : 'foram movidos porque o'} SDR de destino já tinha ligado.</div>` : ''}${r.ja_era_dono ? `<div class="small muted">${num(r.ja_era_dono)} já ${r.ja_era_dono === 1 ? 'era' : 'eram'} do SDR de destino.</div>` : ''}
+      <button class="btn block" style="margin-top:14px" data-act="close">Fechar</button>`);
+    S.lf.offset = 0; S.stats = null; loadLeads(); drawDist();
+  } catch (e) { toast(e.message, true); t.disabled = false; }
+};
+document.addEventListener('change', (e) => {
+  const t = e.target; if (!t || !S.mv) return;
+  const m = S.mv;
+  if (t.dataset && t.dataset.mvsdr) { const id = Number(t.dataset.mvsdr); m.sel = t.checked ? [...new Set([...m.sel, id])] : m.sel.filter((x) => x !== id); mvPreview(); }
+  else if (t.name === 'mvmodo') { m.modo = t.value; m.sel = m.modo === 'um' ? m.sel.slice(0, 1) : m.sel; const d = $('#mvdest'); if (d) d.innerHTML = mvDest(); const h = d && d.previousElementSibling; if (h) h.textContent = m.modo === 'um' ? 'SDR de destino' : 'SDRs de destino (marque um ou mais)'; mvPreview(); }
+  else if (t.id === 'mvone') { m.sel = t.value ? [Number(t.value)] : []; mvPreview(); }
+  else if (t.id === 'mvevit') { m.evitar = t.checked; mvPreview(); }
+});
 
 /* ---------- importação (gestor) ---------- */
 function parseTable(text) {
@@ -708,10 +789,12 @@ function drawImport() {
     <div class="scroll-x"><table class="t"><thead><tr><th>Nome</th>${im.extra ? '<th>Empresa</th>' : ''}<th>Telefone</th><th>Cidade</th></tr></thead><tbody>${im.rows.slice(0, 5).map((r, ri) => `<tr><td>${esc(r[im.map.nome] || '')}</td>${im.extra ? `<td>${esc(im.extra[ri].empresa)}</td>` : ''}<td>${esc(normalizePhone(r[im.map.telefone]) ? fmtPhone(normalizePhone(r[im.map.telefone])) : (r[im.map.telefone] || '—'))}</td><td>${esc(r[im.map.cidade] || '')}</td></tr>`).join('')}</tbody></table></div>
     <label class="field"><span>Nome do lote</span><input type="text" id="lote" placeholder="Ex.: Base clientes novembro"></label>
     <div class="field"><span style="display:block;font-size:13px;font-weight:600;color:var(--ink2);margin-bottom:6px">Distribuir entre</span>
-      ${sdrs.length ? `<div class="checks">${sdrs.map((u) => `<label><input type="checkbox" data-sdr="${u.id}" ${sel.includes(u.id) ? 'checked' : ''}> ${esc(u.nome)}</label>`).join('')}</div>` : '<div class="alert">Cadastre as SDRs na aba Equipe para distribuir. Sem SDR, os contatos entram sem dono e você distribui depois.</div>'}</div>
+      ${sdrs.length ? `<div class="row" style="gap:6px;margin-bottom:6px"><button type="button" class="btn sec sm" data-act="chkall" data-sel="[data-isdr]" data-v="1">Marcar todos</button><button type="button" class="btn sec sm" data-act="chkall" data-sel="[data-isdr]" data-v="0">Desmarcar todos</button></div><div class="checks">${sdrs.map((u) => `<label><input type="checkbox" data-isdr="${u.id}" ${sel.includes(u.id) ? 'checked' : ''}> ${esc(u.nome)}</label>`).join('')}</div>` : '<div class="alert">Cadastre as SDRs na aba Equipe para distribuir. Sem SDR, os contatos entram sem dono e você distribui depois.</div>'}</div>
+    <label class="field"><span>Se o telefone já existir no sistema e estiver sem nenhuma tentativa, mover para</span><select id="movdup"><option value="">— não mover (só avisar) —</option>${sdrs.map((u) => `<option value="${u.id}" ${String(im.movDup) === String(u.id) ? 'selected' : ''}>${esc(u.nome)}</option>`).join('')}</select></label>
     <button class="btn block" style="margin-top:16px" data-act="doimport" ${uniq.size ? '' : 'disabled'}>Importar ${num(uniq.size)} contatos</button></div>`;
   $$('[data-imp]', box).forEach((s) => s.addEventListener('change', () => { im.map[s.dataset.imp] = parseInt(s.value); drawImport(); }));
-  $$('[data-sdr]', box).forEach((c) => c.addEventListener('change', () => { im.sel = $$('[data-sdr]', box).filter((x) => x.checked).map((x) => parseInt(x.dataset.sdr)); }));
+  const md = $('#movdup'); if (md) md.addEventListener('change', () => { im.movDup = md.value; });
+  $$('[data-isdr]', box).forEach((c) => c.addEventListener('change', () => { im.sel = $$('[data-isdr]', box).filter((x) => x.checked).map((x) => parseInt(x.dataset.isdr)); }));
 }
 function loadXlsxLib() {
   if (window.XLSX) return Promise.resolve();
@@ -780,14 +863,34 @@ function startImport(text) { startRows(parseTable(text.replace(/^\uFEFF/, '')));
 ACT.pick = () => $('#ifile').click();
 ACT.readpaste = () => { const t = $('#ipaste').value; if (!t.trim()) return toast('Cole os dados primeiro', true); startImport(t); };
 ACT.impcancel = () => { S.imp = null; drawImport(); };
+function impReport(r) {
+  S.dupInfo = r.dup_lista || [];
+  const L = S.dupInfo, grp = new Map();
+  for (const d of L) { const k = [d.lote, d.responsavel, d.status].join('|'); grp.set(k, (grp.get(k) || 0) + 1); }
+  const linhas = [...grp.entries()].sort((a, b) => b[1] - a[1]).slice(0, 40).map(([k, n]) => { const [lo, sd, st] = k.split('|'); return `<tr><td>${esc(lo)}</td><td>${esc(sd)}</td><td>${esc(st)}</td><td style="text-align:right"><b>${num(n)}</b></td></tr>`; }).join('');
+  const arq = r.repetidos_arquivo ? ` (${num(r.repetidos_arquivo)} repetido${r.repetidos_arquivo === 1 ? '' : 's'} dentro do próprio arquivo)` : '';
+  const sistema = r.duplicados_banco ?? r.duplicados;
+  return `<div class="alert ok"><b>${num(r.importados)} contatos importados.</b> ${r.duplicados ? num(r.duplicados) + ' já existiam' + arq + '. ' : ''}${r.invalidos ? num(r.invalidos) + ' sem telefone válido.' : ''}</div>` +
+    (sistema ? `<div class="card" style="margin-top:10px"><h3>${num(sistema)} já estavam no sistema</h3>
+      <div class="small" style="margin:4px 0 8px">${num(r.dup_virgens || 0)} deles estão sem nenhuma tentativa.${r.dup_movidos !== undefined ? ` <b>${num(r.dup_movidos)}</b> foram movidos para <b>${esc(r.dup_movidos_para)}</b>.` : ''}</div>
+      <div class="scroll-x"><table class="t"><thead><tr><th>Lista</th><th>SDR</th><th>Situação</th><th style="text-align:right">Contatos</th></tr></thead><tbody>${linhas}</tbody></table></div>
+      <button class="btn sec sm" style="margin-top:10px" data-act="dupcsv">${ic('download', 16)} Baixar lista de duplicados (CSV)</button></div>` : '');
+}
+ACT.dupcsv = () => {
+  const L = S.dupInfo || []; if (!L.length) return;
+  const c = (v) => { let x = String(v ?? ''); if (/^[=+\-@]/.test(x)) x = "'" + x; return '"' + x.replace(/"/g, '""') + '"'; };
+  const rows = [['Telefone', 'Nome no arquivo', 'Nome cadastrado', 'Lista', 'Responsável', 'Situação', 'Tentativas', 'Última tabulação', 'Sem tentativa'].map(c).join(';')]
+    .concat(L.map((d) => [fmtPhone(d.telefone), d.nome_arquivo, d.nome, d.lote, d.responsavel, d.status, d.tentativas, d.ultima_tab, d.virgem ? 'Sim' : 'Não'].map(c).join(';')));
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['﻿' + rows.join('\r\n')], { type: 'text/csv;charset=utf-8' })); a.download = 'duplicados-importacao.csv'; document.body.appendChild(a); a.click(); a.remove();
+};
 ACT.doimport = async (t) => {
   const im = S.imp, leads = im.rows.map((r, i) => ({ ...(im.extra ? im.extra[i] : {}), nome: r[im.map.nome] || '', telefone: r[im.map.telefone] || '', cidade: r[im.map.cidade] || '', consumo: r[im.map.consumo] || '', email: r[im.map.email] || '', obs: r[im.map.obs] || '' }));
   const sel = im.sel || (S.users || []).filter((u) => u.papel === 'sdr' && u.ativo).map((u) => u.id);
   t.disabled = true;
   try {
-    const r = await api('/leads/importar', { method: 'POST', body: { leads, distribuir: sel, lote: $('#lote').value } });
+    const r = await api('/leads/importar', { method: 'POST', body: { leads, distribuir: sel, lote: $('#lote').value, mover_dup: im.movDup || null } });
     S.imp = null; drawImport();
-    $('#imp').innerHTML = `<div class="alert ok"><b>${num(r.importados)} contatos importados.</b> ${r.duplicados ? num(r.duplicados) + ' já existiam. ' : ''}${r.invalidos ? num(r.invalidos) + ' sem telefone válido.' : ''}</div>` + $('#imp').innerHTML;
+    $('#imp').innerHTML = impReport(r) + $('#imp').innerHTML;
     drawDist(); S.lf.offset = 0; loadLeads();
   } catch (e) { toast(e.message, true); t.disabled = false; }
 };
@@ -798,8 +901,12 @@ async function drawDist() {
   const us = S.users || (S.users = await api('/usuarios')); const sdrs = us.filter((u) => u.papel === 'sdr' && u.ativo);
   box.innerHTML = `<div class="card" style="margin-top:14px"><h3>${num(r.total)} contatos sem responsável</h3>
     <p class="muted small" style="margin:4px 0 10px">Distribua de forma igual entre as SDRs escolhidas.</p>
-    ${sdrs.length ? `<div class="checks">${sdrs.map((u) => `<label><input type="checkbox" data-dsdr="${u.id}" checked> ${esc(u.nome)}</label>`).join('')}</div><button class="btn" style="margin-top:12px" data-act="dodist">Distribuir</button>` : '<div class="alert">Cadastre SDRs na aba Equipe.</div>'}</div>`;
+    ${sdrs.length ? `<div class="row" style="gap:6px;margin-bottom:6px"><button type="button" class="btn sec sm" data-act="chkall" data-sel="[data-dsdr]" data-v="1">Marcar todos</button><button type="button" class="btn sec sm" data-act="chkall" data-sel="[data-dsdr]" data-v="0">Desmarcar todos</button></div><div class="checks">${sdrs.map((u) => `<label><input type="checkbox" data-dsdr="${u.id}" checked> ${esc(u.nome)}</label>`).join('')}</div><button class="btn" style="margin-top:12px" data-act="dodist">Distribuir</button>` : '<div class="alert">Cadastre SDRs na aba Equipe.</div>'}</div>`;
 }
+ACT.chkall = (t) => {
+  const on = t.dataset.v === '1';
+  document.querySelectorAll(t.dataset.sel).forEach((c) => { if (c.checked !== on) { c.checked = on; c.dispatchEvent(new Event('change', { bubbles: true })); } });
+};
 ACT.dodist = async (t) => {
   const ids = $$('[data-dsdr]').filter((c) => c.checked).map((c) => parseInt(c.dataset.dsdr));
   if (!ids.length) return toast('Escolha ao menos uma SDR', true);
@@ -1221,7 +1328,8 @@ S.lst = S.lst || { de: '', ate: '', d: [] };
 const diaISO = (off) => new Date(Date.now() - 3 * 3600 * 1000 - off * 86400000).toISOString().slice(0, 10);
 VIEWS.listas = async () => {
   $('#main').innerHTML = `<div class="top"><div><h1>Listas</h1><div class="muted small">Todas as listas trabalhadas, com tabulações, e exportação para Excel (CSV)</div></div>
-    <div class="row wrap" style="gap:8px"><button class="btn sec sm" data-act="lstexp" data-lote="__all" data-modo="contatos">${ic('download', 16)} Tudo por contato</button><button class="btn sec sm" data-act="lstexp" data-lote="__all" data-modo="atividades">${ic('download', 16)} Tudo por atividade</button></div></div>
+    <div class="row wrap" style="gap:8px"><button class="btn sec sm" data-act="lstexp" data-lote="__all" data-modo="contatos">${ic('download', 16)} Exportar todos os contatos</button><button class="btn sec sm" data-act="lstexp" data-lote="__all" data-modo="contatos" data-cpc="1">${ic('download', 16)} Exportar sem CPC</button><button class="btn sec sm" data-act="lstexp" data-lote="__all" data-modo="atividades">${ic('download', 16)} Tudo por atividade</button></div></div>
+  <div class="muted tiny" style="margin:-4px 0 10px">“Exportar contatos” traz todos os contatos da lista, inclusive os nunca ligados, com o histórico completo (não depende do período). “Sem CPC” = já tentou, nunca falou com a pessoa e a última tabulação é caixa postal, não atendeu ou mensagem sem resposta.</div>
   <div class="card row wrap" style="gap:8px;margin-bottom:12px"><span class="small muted">Período</span><input type="date" id="lde" value="${S.lst.de}" style="width:auto"><span class="small muted">até</span><input type="date" id="late" value="${S.lst.ate}" style="width:auto">
     <button class="btn sec sm" data-act="lstper" data-v="tudo">Tudo</button><button class="btn sec sm" data-act="lstper" data-v="hoje">Hoje</button><button class="btn sec sm" data-act="lstper" data-v="7">7 dias</button><button class="btn sec sm" data-act="lstper" data-v="mes">Este mês</button></div>
   <div id="lbody"><p class="muted">Carregando…</p></div>`;
@@ -1239,11 +1347,11 @@ async function loadLst() {
   const box = $('#lbody'); if (!box) return;
   try { S.lst.d = await api('/listas?' + lstQS()); } catch (e) { box.innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; return; }
   const L = S.lst.d;
-  if (!L.length) { box.innerHTML = '<div class="card"><p class="muted">Nenhuma lista com atividade neste período.</p></div>'; return; }
+  if (!L.length) { box.innerHTML = '<div class="card"><p class="muted">Nenhuma lista importada ainda.</p></div>'; return; }
   const tot = L.reduce((a, x) => ({ c: a.c + x.trabalhados, l: a.l + x.ligacoes, v: a.v + x.vendas }), { c: 0, l: 0, v: 0 });
   box.innerHTML = `<div class="muted small" style="margin-bottom:6px">${L.length} lista${L.length === 1 ? '' : 's'} · ${num(tot.c)} contatos trabalhados · ${num(tot.l)} ligações · ${num(tot.v)} vendas</div>` + L.map((x, i) => `<div class="card" style="margin-top:12px">
-    <div class="row sp wrap" style="gap:8px"><div><b>${esc(x.nome)}</b><div class="tiny muted">${num(x.total)} contato${x.total === 1 ? '' : 's'} na lista · ${num(x.trabalhados)} trabalhados · última atividade ${fdt(x.ultima)}</div></div>
-      <div class="row wrap" style="gap:6px"><button class="btn sec sm" data-act="lstexp" data-i="${i}" data-modo="contatos">${ic('download', 16)} Exportar contatos</button><button class="btn sec sm" data-act="lstexp" data-i="${i}" data-modo="atividades">${ic('download', 16)} Exportar atividades</button></div></div>
+    <div class="row sp wrap" style="gap:8px"><div><b>${esc(x.nome)}</b><div class="tiny muted">${num(x.total)} contato${x.total === 1 ? '' : 's'} na lista · ${num(x.trabalhados)} trabalhados · ${x.ultima ? 'última atividade ' + fdt(x.ultima) : 'sem atividade no período'}</div></div>
+      <div class="row wrap" style="gap:6px"><button class="btn sec sm" data-act="lstexp" data-i="${i}" data-modo="contatos">${ic('download', 16)} Exportar contatos</button><button class="btn sec sm" data-act="lstexp" data-i="${i}" data-modo="contatos" data-cpc="1">${ic('download', 16)} Sem CPC</button><button class="btn sec sm" data-act="lstexp" data-i="${i}" data-modo="atividades">${ic('download', 16)} Exportar atividades</button></div></div>
     <div class="nums" style="margin-top:10px"><div><b>${num(x.ligacoes)}</b><span>ligações (${num(x.atendidas)} atend.)</span></div><div><b>${num(x.whatsapp)}</b><span>WhatsApp</span></div><div><b>${num(x.interessados)}</b><span>interessados</span></div><div><b>${num(x.vendas)}</b><span>vendas${x.valor ? ' · ' + money(x.valor) : ''}</span></div></div>
     <div class="tiny" style="margin-top:8px"><b>Quem trabalhou:</b> ${x.sdrs.map((s) => `${esc(s.nome)} (${s.contatos} contato${s.contatos === 1 ? '' : 's'} · ${s.ligacoes} lig. · ${s.whatsapp} WhatsApp)`).join(' · ') || '—'}</div>
     <details style="margin-top:8px"><summary class="small"><b>Tabulações e situação dos contatos</b></summary>
@@ -1252,7 +1360,7 @@ async function loadLst() {
 }
 ACT.lstexp = async (t) => {
   const p = lstQS(); const i = t.dataset.i;
-  p.set('lote', i !== undefined ? (S.lst.d[i].lote || '__none') : t.dataset.lote); p.set('modo', t.dataset.modo);
+  p.set('lote', i !== undefined ? (S.lst.d[i].lote || '__none') : t.dataset.lote); p.set('modo', t.dataset.modo); if (t.dataset.cpc) p.set('semcpc', '1');
   try {
     const r = await fetch('/api/listas/export?' + p, { headers: { Authorization: 'Bearer ' + TOKEN } });
     if (!r.ok) throw new Error('Falha ao exportar');
