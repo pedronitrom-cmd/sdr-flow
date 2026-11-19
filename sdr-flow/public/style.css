@@ -195,3 +195,6 @@ details summary{cursor:pointer;padding:6px 0}
 .cal-d.hoje{border-color:#f59e0b}
 .cal-d.on{background:var(--navy);color:#fff;font-weight:700}
 .cal-d:disabled{opacity:.3;cursor:default}
+
+.mname{font-size:13px;font-weight:700;line-height:1.2;text-align:right;max-width:52vw;overflow-wrap:anywhere}
+.mtop .logo span{white-space:nowrap}
