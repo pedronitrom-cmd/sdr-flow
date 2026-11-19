@@ -86,6 +86,15 @@ CREATE TABLE IF NOT EXISTS movimentos (
   criado_em INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_mov_lead ON movimentos(lead_id);
+CREATE TABLE IF NOT EXISTS lista_alteracoes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id INTEGER NOT NULL,
+  de_lote TEXT,
+  para_lote TEXT,
+  por_id INTEGER,
+  criado_em INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_listalt_lead ON lista_alteracoes(lead_id);
 CREATE TABLE IF NOT EXISTS mensagens (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   titulo TEXT NOT NULL,
@@ -421,6 +430,8 @@ app.get('/api/leads/:id', auth(), wrap(async (req, res) => {
   const hist = await all(`SELECT i.*, u.nome AS user_nome FROM interacoes i JOIN users u ON u.id=i.user_id WHERE i.lead_id=? ORDER BY i.criado_em DESC`, [l.id]);
   const movs = await all(`SELECT m.id, m.criado_em, d.nome de_nome, p.nome para_nome, g.nome user_nome FROM movimentos m LEFT JOIN users d ON d.id=m.de_id LEFT JOIN users p ON p.id=m.para_id LEFT JOIN users g ON g.id=m.por_id WHERE m.lead_id=?`, [l.id]);
   for (const m of movs) hist.push({ canal: 'movimento', resultado: 'movido', criado_em: m.criado_em, user_nome: m.user_nome || '', nota: `Movido de ${m.de_nome || 'sem dono'} para ${m.para_nome || 'sem dono'}` });
+  const alts = await all(`SELECT a.criado_em, a.de_lote, a.para_lote, g.nome user_nome FROM lista_alteracoes a LEFT JOIN users g ON g.id=a.por_id WHERE a.lead_id=?`, [l.id]);
+  for (const m of alts) hist.push({ canal: 'movimento', resultado: 'movido', criado_em: m.criado_em, user_nome: m.user_nome || '', nota: `Lista alterada de ${m.de_lote || 'sem lista'} para ${m.para_lote}` });
   hist.sort((a, b) => b.criado_em - a.criado_em);
   res.json({ lead: l, historico: hist });
 }));
@@ -509,9 +520,10 @@ app.post('/api/leads/excluir', auth(['gestor']), wrap(async (req, res) => {
 /* ---------- mover contatos entre SDRs (gestor) ----------
    Só troca o responsável; histórico, tentativas e anotações ficam. Cada troca vira um registro "movido de X para Y". */
 app.post('/api/leads/mover', auth(['gestor']), wrap(async (req, res) => {
-  const { ids, filtro, destinos, modo, evitar_quem_ligou, simular } = req.body || {};
+  const { ids, filtro, destinos, modo, evitar_quem_ligou, simular, nova_lista, so_sem_tentativa } = req.body || {};
+  const novaLista = nova_lista ? String(nova_lista).trim().slice(0, 120) : '';
   const dest = [...new Set((destinos || []).map(Number).filter(Boolean))];
-  if (!dest.length) return res.status(400).json({ erro: 'Escolha pelo menos um SDR de destino' });
+  if (!dest.length && !novaLista) return res.status(400).json({ erro: 'Escolha pelo menos um SDR de destino ou informe a nova lista' });
   if (modo === 'um' && dest.length !== 1) return res.status(400).json({ erro: 'No modo "todos para um SDR" escolha apenas um destino' });
   const sdrs = await all(`SELECT id, nome FROM users WHERE ativo=1 AND papel='sdr' AND id IN (${inList(dest.length)}) ORDER BY nome`, dest);
   if (sdrs.length !== dest.length) return res.status(400).json({ erro: 'SDR de destino inválido ou inativo' });
@@ -526,7 +538,8 @@ app.post('/api/leads/mover', auth(['gestor']), wrap(async (req, res) => {
     if (!cond.length) return res.status(400).json({ erro: 'Aplique um filtro ou selecione contatos' });
     w = cond.join(' AND '); a = args;
   }
-  const leads = await all(`SELECT l.id, l.owner_id FROM leads l WHERE ${w} ORDER BY l.id`, a);
+  if (novaLista && so_sem_tentativa !== false) w = `(${w}) AND ${VIRGEM('l.')}`;
+  const leads = await all(`SELECT l.id, l.owner_id, l.lote FROM leads l WHERE ${w} ORDER BY l.id`, a);
   const trabalhou = new Map();
   if (evitar_quem_ligou && leads.length) {
     for (const r of await all(`SELECT DISTINCT i.lead_id, i.user_id FROM interacoes i JOIN leads l ON l.id=i.lead_id WHERE i.canal<>'nota' AND ${w}`, a)) {
@@ -535,7 +548,7 @@ app.post('/api/leads/mover', auth(['gestor']), wrap(async (req, res) => {
   }
   const cont = new Map(sdrs.map((s) => [s.id, 0])), plano = [];
   const out = { total: leads.length, movidos: 0, ja_era_dono: 0, ja_ligou: 0, por_sdr: [] };
-  for (const l of leads) {
+  for (const l of (dest.length ? leads : [])) {
     const elegiveis = sdrs.filter((s) => s.id !== l.owner_id && !(trabalhou.get(l.id) || new Set()).has(s.id));
     if (!elegiveis.length) {
       // por que ficou de fora
@@ -548,8 +561,18 @@ app.post('/api/leads/mover', auth(['gestor']), wrap(async (req, res) => {
   }
   out.movidos = plano.length;
   out.por_sdr = sdrs.map((s) => ({ id: s.id, nome: s.nome, qtd: cont.get(s.id) }));
+  const trocaLista = novaLista ? leads.filter((l) => (l.lote || '') !== novaLista) : [];
+  if (novaLista) { out.nova_lista = novaLista; out.lista_alterados = trocaLista.length; out.lista_ja_estavam = leads.length - trocaLista.length; }
   if (simular) return res.json({ ...out, simulado: true });
   await gravarMovimentos(plano, req.user.id);
+  if (trocaLista.length) {
+    const t = now(), st = [];
+    for (const l of trocaLista) {
+      st.push(['UPDATE leads SET lote=? WHERE id=?', [novaLista, l.id]]);
+      st.push(['INSERT INTO lista_alteracoes (lead_id, de_lote, para_lote, por_id, criado_em) VALUES (?,?,?,?,?)', [l.id, l.lote || null, novaLista, req.user.id, t]]);
+    }
+    for (let i = 0; i < st.length; i += 400) await batch(st.slice(i, i + 400));
+  }
   res.json(out);
 }));
 
