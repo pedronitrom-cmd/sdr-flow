@@ -791,10 +791,8 @@ function drawImport() {
     <label class="field"><span>Nome do lote</span><input type="text" id="lote" placeholder="Ex.: Base clientes novembro"></label>
     <div class="field"><span style="display:block;font-size:13px;font-weight:600;color:var(--ink2);margin-bottom:6px">Distribuir entre</span>
       ${sdrs.length ? `<div class="row" style="gap:6px;margin-bottom:6px"><button type="button" class="btn sec sm" data-act="chkall" data-sel="[data-isdr]" data-v="1">Marcar todos</button><button type="button" class="btn sec sm" data-act="chkall" data-sel="[data-isdr]" data-v="0">Desmarcar todos</button></div><div class="checks">${sdrs.map((u) => `<label><input type="checkbox" data-isdr="${u.id}" ${sel.includes(u.id) ? 'checked' : ''}> ${esc(u.nome)}</label>`).join('')}</div>` : '<div class="alert">Cadastre as SDRs na aba Equipe para distribuir. Sem SDR, os contatos entram sem dono e você distribui depois.</div>'}</div>
-    <label class="field"><span>Se o telefone já existir no sistema e estiver sem nenhuma tentativa, mover para</span><select id="movdup"><option value="">— não mover (só avisar) —</option>${sdrs.map((u) => `<option value="${u.id}" ${String(im.movDup) === String(u.id) ? 'selected' : ''}>${esc(u.nome)}</option>`).join('')}</select></label>
     <button class="btn block" style="margin-top:16px" data-act="doimport" ${uniq.size ? '' : 'disabled'}>Importar ${num(uniq.size)} contatos</button></div>`;
   $$('[data-imp]', box).forEach((s) => s.addEventListener('change', () => { im.map[s.dataset.imp] = parseInt(s.value); drawImport(); }));
-  const md = $('#movdup'); if (md) md.addEventListener('change', () => { im.movDup = md.value; });
   $$('[data-isdr]', box).forEach((c) => c.addEventListener('change', () => { im.sel = $$('[data-isdr]', box).filter((x) => x.checked).map((x) => parseInt(x.dataset.isdr)); }));
 }
 function loadXlsxLib() {
@@ -864,6 +862,24 @@ function startImport(text) { startRows(parseTable(text.replace(/^\uFEFF/, '')));
 ACT.pick = () => $('#ifile').click();
 ACT.readpaste = () => { const t = $('#ipaste').value; if (!t.trim()) return toast('Cole os dados primeiro', true); startImport(t); };
 ACT.impcancel = () => { S.imp = null; drawImport(); };
+function migrDup(L) {
+  const g = new Map();
+  for (const d of L) if (d.virgem) g.set(d.lote, (g.get(d.lote) || 0) + 1);
+  S.dupL = [...g.entries()].sort((a, b) => b[1] - a[1]);
+  if (!S.dupL.length) return '';
+  const bar = `<div class="row" style="gap:6px;margin:6px 0"><button type="button" class="btn sec sm" data-act="chkall" data-sel="[data-dupl]" data-v="1">Marcar todas</button><button type="button" class="btn sec sm" data-act="chkall" data-sel="[data-dupl]" data-v="0">Desmarcar todas</button></div>`;
+  return `<div class="sec-title" style="margin-top:14px">Mover os contatos sem nenhuma tentativa</div>
+    <div class="small muted">Escolha de quais listas quer mover. Nada é movido agora: você escolhe o SDR e confirma na próxima tela.</div>${bar}
+    <div class="checks" style="flex-direction:column;align-items:stretch">${S.dupL.map(([lo, n], i) => `<label><input type="checkbox" data-dupl="${i}" checked> ${esc(lo)} <span class="muted small">· ${num(n)} sem tentativa</span></label>`).join('')}</div>
+    <button class="btn" style="margin-top:10px" data-act="dupmover">Continuar</button>`;
+}
+ACT.dupmover = () => {
+  const idx = $$('[data-dupl]').filter((c) => c.checked).map((c) => Number(c.dataset.dupl));
+  if (!idx.length) return toast('Marque ao menos uma lista', true);
+  const nomes = new Set(idx.map((i) => S.dupL[i][0]));
+  const ids = [...new Set((S.dupInfo || []).filter((d) => d.virgem && nomes.has(d.lote)).map((d) => d.id))];
+  abrirMover({ titulo: 'Mover contatos sem nenhuma tentativa', desc: 'Listas: ' + [...nomes].join(', '), base: { ids }, qtd: ids.length });
+};
 function impReport(r) {
   S.dupInfo = r.dup_lista || [];
   const L = S.dupInfo, grp = new Map();
@@ -873,8 +889,9 @@ function impReport(r) {
   const sistema = r.duplicados_banco ?? r.duplicados;
   return `<div class="alert ok"><b>${num(r.importados)} contatos importados.</b> ${r.duplicados ? num(r.duplicados) + ' já existiam' + arq + '. ' : ''}${r.invalidos ? num(r.invalidos) + ' sem telefone válido.' : ''}</div>` +
     (sistema ? `<div class="card" style="margin-top:10px"><h3>${num(sistema)} já estavam no sistema</h3>
-      <div class="small" style="margin:4px 0 8px">${num(r.dup_virgens || 0)} deles estão sem nenhuma tentativa.${r.dup_movidos !== undefined ? ` <b>${num(r.dup_movidos)}</b> foram movidos para <b>${esc(r.dup_movidos_para)}</b>.` : ''}</div>
+      <div class="small" style="margin:4px 0 8px">${num(r.dup_virgens || 0)} deles estão sem nenhuma tentativa.</div>
       <div class="scroll-x"><table class="t"><thead><tr><th>Lista</th><th>SDR</th><th>Situação</th><th style="text-align:right">Contatos</th></tr></thead><tbody>${linhas}</tbody></table></div>
+      ${migrDup(L)}
       <button class="btn sec sm" style="margin-top:10px" data-act="dupcsv">${ic('download', 16)} Baixar lista de duplicados (CSV)</button></div>` : '');
 }
 ACT.dupcsv = () => {
@@ -889,7 +906,7 @@ ACT.doimport = async (t) => {
   const sel = im.sel || (S.users || []).filter((u) => u.papel === 'sdr' && u.ativo).map((u) => u.id);
   t.disabled = true;
   try {
-    const r = await api('/leads/importar', { method: 'POST', body: { leads, distribuir: sel, lote: $('#lote').value, mover_dup: im.movDup || null } });
+    const r = await api('/leads/importar', { method: 'POST', body: { leads, distribuir: sel, lote: $('#lote').value } });
     S.imp = null; drawImport();
     const rep = document.createElement('div'); rep.innerHTML = impReport(r); $('#imp').prepend(...rep.childNodes);
     drawDist(); S.lf.offset = 0; loadLeads();
