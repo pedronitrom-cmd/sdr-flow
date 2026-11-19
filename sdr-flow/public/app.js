@@ -726,7 +726,7 @@ ACT.domover = async (t) => {
       <div class="sec-title">Resumo por SDR</div>${r.por_sdr.map((x) => `<div class="row sp small" style="padding:4px 0"><span>${esc(x.nome)}</span><b>${num(x.qtd)}</b></div>`).join('')}
       ${r.ja_ligou ? `<div class="small muted" style="margin-top:8px">${num(r.ja_ligou)} não ${r.ja_ligou === 1 ? 'foi movido porque o' : 'foram movidos porque o'} SDR de destino já tinha ligado.</div>` : ''}${r.ja_era_dono ? `<div class="small muted">${num(r.ja_era_dono)} já ${r.ja_era_dono === 1 ? 'era' : 'eram'} do SDR de destino.</div>` : ''}
       <button class="btn block" style="margin-top:14px" data-act="close">Fechar</button>`);
-    S.lf.offset = 0; S.stats = null; loadLeads(); drawDist(); drawMigr();
+    S.lf.offset = 0; S.stats = null; loadLeads(); drawDist();
   } catch (e) { toast(e.message, true); t.disabled = false; }
 };
 document.addEventListener('change', (e) => {
@@ -768,31 +768,6 @@ function setupImport(rows) {
   }
   S.imp = { rows: hasHeader ? rows.slice(1) : rows, headers, map, sel: S.imp ? S.imp.sel : null };
 }
-async function drawMigr() {
-  const box = $('#migr'); if (!box) return;
-  let L, us;
-  try { L = (await api('/leads/virgens')).filter((x) => x.lote && x.virgens > 0); us = S.users || (S.users = await api('/usuarios')); } catch (e) { return; }
-  const b2 = $('#migr'); if (!b2) return;
-  S.migL = L;
-  const sdrs = us.filter((u) => u.papel === 'sdr' && u.ativo);
-  const bar = (sel) => `<div class="row" style="gap:6px;margin-bottom:6px"><button type="button" class="btn sec sm" data-act="chkall" data-sel="${sel}" data-v="1">Marcar todos</button><button type="button" class="btn sec sm" data-act="chkall" data-sel="${sel}" data-v="0">Desmarcar todos</button></div>`;
-  if (!L.length || !sdrs.length) { b2.innerHTML = ''; return; }
-  b2.innerHTML = `<div class="card" style="margin-top:14px"><h3>Migrar telefones não ativados</h3>
-    <p class="muted small" style="margin:4px 0 10px">Escolha de qual importação (lista) você quer pegar os contatos que ainda não foram ligados e para quais SDRs mandar. Só vão os contatos sem nenhuma tentativa; o resto não é mexido.</p>
-    <div class="sec-title">Importações</div>${bar('[data-mlote]')}
-    <div class="checks" style="flex-direction:column;align-items:stretch">${L.map((x, i) => `<label><input type="checkbox" data-mlote="${i}"> ${esc(x.lote)} <span class="muted small">· ${num(x.virgens)} sem tentativa (de ${num(x.total)})</span></label>`).join('')}</div>
-    <div class="sec-title">SDRs que vão receber</div>${bar('[data-msdr]')}
-    <div class="checks">${sdrs.map((u) => `<label><input type="checkbox" data-msdr="${u.id}"> ${esc(u.nome)}</label>`).join('')}</div>
-    <button class="btn" style="margin-top:12px" data-act="migrar">Continuar</button></div>`;
-}
-ACT.migrar = () => {
-  const idx = $$('[data-mlote]').filter((c) => c.checked).map((c) => Number(c.dataset.mlote));
-  const sdrs = $$('[data-msdr]').filter((c) => c.checked).map((c) => Number(c.dataset.msdr));
-  if (!idx.length) return toast('Escolha ao menos uma importação', true);
-  if (!sdrs.length) return toast('Escolha ao menos um SDR', true);
-  const ls = idx.map((i) => S.migL[i]), nomes = ls.map((x) => x.lote);
-  abrirMover({ titulo: 'Migrar contatos não ativados', desc: 'Importações: ' + nomes.join(', ') + ' · só contatos sem nenhuma tentativa', base: { filtro: { lotes: nomes, tent: '0' } }, qtd: ls.reduce((s, x) => s + x.virgens, 0), sel: sdrs });
-};
 function drawImport() {
   const box = $('#imp'); if (!box) return;
   if (!S.imp) {
@@ -801,9 +776,7 @@ function drawImport() {
       <div class="muted small" style="margin:12px 0 8px">ou cole aqui os dados (com cabeçalho)</div>
       <textarea id="ipaste" placeholder="nome;telefone;cidade&#10;Maria Souza;(34) 99999-1111;Uberlândia"></textarea>
       <button class="btn sec" style="margin-top:8px" data-act="readpaste">Ler dados colados</button></div></div>`;
-    box.innerHTML += '<div id="migr"></div>';
     $('#ifile').addEventListener('change', readFile);
-    drawMigr();
     return;
   }
   const im = S.imp, colOpts = (sel) => '<option value="-1">— não usar —</option>' + im.headers.map((h, i) => `<option value="${i}" ${sel === i ? 'selected' : ''}>${esc(h)}</option>`).join('');
