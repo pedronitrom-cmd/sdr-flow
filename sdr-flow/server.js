@@ -386,6 +386,7 @@ function leadConds(f, p = '') {
   if (f.status) { cond.push(`${p}status = ?`); args.push(String(f.status)); }
   if (f.lote === '__none') cond.push(`${p}lote IS NULL`);
   else if (f.lote) { cond.push(`${p}lote = ?`); args.push(String(f.lote)); }
+  if (Array.isArray(f.lotes) && f.lotes.length) { const ls = f.lotes.slice(0, 200).map(String); cond.push(`${p}lote IN (${inList(ls.length)})`); args.push(...ls); }
   if (f.q) { cond.push(`(${p}nome LIKE ? OR ${p}telefone LIKE ? OR ${p}cidade LIKE ?)`); const q = '%' + f.q + '%'; args.push(q, q, q); }
   const t = String(f.tent ?? '');
   if (t === '0') cond.push(`(${VIRGEM(p)})`);
@@ -406,6 +407,11 @@ app.get('/api/leads', auth(), wrap(async (req, res) => {
     all(`SELECT l.*, u.nome AS owner_nome FROM leads l LEFT JOIN users u ON u.id=l.owner_id ${w} ORDER BY l.id DESC LIMIT ? OFFSET ?`, [...args, Math.min(Number(limit), 200), Number(offset)])
   ]);
   res.json({ total: tot.c, leads: rows });
+}));
+
+// listas (importações) com quantos contatos ainda estão sem nenhuma tentativa
+app.get('/api/leads/virgens', auth(['gestor']), wrap(async (req, res) => {
+  res.json(await all(`SELECT lote, COUNT(*) total, SUM(CASE WHEN ${VIRGEM('')} THEN 1 ELSE 0 END) virgens, MAX(criado_em) criado_em FROM leads GROUP BY lote ORDER BY MAX(criado_em) DESC`));
 }));
 
 app.get('/api/leads/:id', auth(), wrap(async (req, res) => {
