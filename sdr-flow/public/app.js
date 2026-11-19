@@ -665,7 +665,7 @@ document.addEventListener('change', (e) => {
   else if (t.id === 'dxtr' && S.del) { S.del.tr = t.checked; simularExclusao(); }
   else if (t.id === 'dxv') validarExclusao();
 });
-document.addEventListener('input', (e) => { if (e.target && e.target.id === 'dxt') validarExclusao(); });
+document.addEventListener('input', (e) => { if (e.target && e.target.id === 'dxt') validarExclusao(); if (e.target && e.target.id === 'mvlista' && S.mv) { S.mv.lista = e.target.value; const g = $('#mvgo'); if (g) g.disabled = true; clearTimeout(S.mvT); S.mvT = setTimeout(mvPreview, 450); } });
 
 /* ---------- mover contatos para outro SDR (gestor) ---------- */
 ACT.movsel = () => { const ids = [...S.sel]; if (!ids.length) return; abrirMover({ titulo: 'Mover contatos selecionados', desc: `${num(ids.length)} contato${ids.length === 1 ? '' : 's'} selecionado${ids.length === 1 ? '' : 's'}`, base: { ids }, qtd: ids.length }); };
@@ -676,9 +676,15 @@ ACT.movfiltro = () => {
 };
 async function abrirMover(cfg) {
   const us = S.users || (S.users = await api('/usuarios'));
-  S.mv = { ...cfg, sdrs: us.filter((u) => u.papel === 'sdr' && u.ativo), sel: [], modo: 'dividir', evitar: true, prev: null, seq: 0 };
+  S.mv = { ...cfg, sdrs: us.filter((u) => u.papel === 'sdr' && u.ativo), sel: [], modo: 'dividir', evitar: true, nl: false, lista: '', vir: true, prev: null, seq: 0 };
   if (cfg.sel) S.mv.sel = cfg.sel.filter((id) => S.mv.sdrs.some((u) => u.id === id));
   drawMover();
+}
+function mvBody(m, simular) {
+  const b = { ...m.base, destinos: m.sel, modo: m.modo, evitar_quem_ligou: m.evitar };
+  if (m.nl && m.lista.trim()) { b.nova_lista = m.lista.trim(); b.so_sem_tentativa = m.vir; }
+  if (simular) b.simular = true;
+  return b;
 }
 function mvDest() {
   const m = S.mv;
@@ -695,6 +701,11 @@ function drawMover() {
     <div class="sec-title">${m.modo === 'um' ? 'SDR de destino' : 'SDRs de destino (marque um ou mais)'}</div>
     <div id="mvdest">${m.sdrs.length ? mvDest() : '<div class="alert">Nenhum SDR ativo cadastrado.</div>'}</div>
     <label class="chk" style="margin-top:10px"><input type="checkbox" id="mvevit" ${m.evitar ? 'checked' : ''}> <span>Não passar o contato para o SDR que já ligou (ou já trabalhou) nele</span></label>
+    <div class="sec-title">Nova lista (opcional)</div>
+    <label class="chk"><input type="checkbox" id="mvnl" ${m.nl ? 'checked' : ''}> <span>Colocar os contatos em uma nova lista (o responsável só muda se você escolher SDR acima)</span></label>
+    <div id="mvnlbox" style="${m.nl ? '' : 'display:none;'}margin-top:6px"><input type="text" id="mvlista" placeholder="Nome da nova lista" maxlength="120" value="${esc(m.lista)}">
+      <label class="chk" style="margin-top:6px"><input type="checkbox" id="mvvir" ${m.vir ? 'checked' : ''}> <span>Só contatos sem nenhuma tentativa</span></label>
+      <div class="small muted" style="margin-top:4px">A lista de origem fica registrada no histórico de cada contato (“lista alterada de X para Y”).</div></div>
     <div id="mvprev" style="margin-top:12px"></div>
     <div class="row" style="margin-top:16px"><button class="btn sec grow" data-act="close">Cancelar</button><button class="btn grow" id="mvgo" data-act="domover" disabled>Mover</button></div>`);
   mvPreview();
@@ -702,28 +713,33 @@ function drawMover() {
 async function mvPreview() {
   const m = S.mv, box = $('#mvprev'), go = $('#mvgo'); if (!m || !box) return;
   const seq = ++m.seq;
-  if (!m.sel.length) { box.innerHTML = `<div class="muted small">${m.qtd ? num(m.qtd) + ' contato' + (m.qtd === 1 ? '' : 's') + ' no total. ' : ''}Escolha o SDR de destino.</div>`; go.disabled = true; go.textContent = 'Mover'; return; }
+  const temLista = m.nl && m.lista.trim();
+  if (!m.sel.length && !temLista) { box.innerHTML = `<div class="muted small">${m.qtd ? num(m.qtd) + ' contato' + (m.qtd === 1 ? '' : 's') + ' no total. ' : ''}Escolha o SDR de destino ou informe a nova lista.</div>`; go.disabled = true; go.textContent = 'Mover'; return; }
   box.innerHTML = '<div class="muted small">Calculando…</div>'; go.disabled = true;
-  let r; try { r = await api('/leads/mover', { method: 'POST', body: { ...m.base, destinos: m.sel, modo: m.modo, evitar_quem_ligou: m.evitar, simular: true } }); } catch (e) { if (seq === m.seq && $('#mvprev')) $('#mvprev').innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; return; }
+  let r; try { r = await api('/leads/mover', { method: 'POST', body: mvBody(m, true) }); } catch (e) { if (seq === m.seq && $('#mvprev')) $('#mvprev').innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; return; }
   if (seq !== m.seq || !$('#mvprev')) return;
   m.prev = r;
   const nomes = m.sdrs.filter((u) => m.sel.includes(u.id));
   const avisos = [];
   if (m.evitar && r.ja_ligou > 0) avisos.push(nomes.length === 1 ? `${num(r.ja_ligou)} contato${r.ja_ligou === 1 ? ' já foi ligado' : 's já foram ligados'} por ${esc(nomes[0].nome)} e não ${r.ja_ligou === 1 ? 'será movido' : 'serão movidos'} para ele.` : `${num(r.ja_ligou)} contato${r.ja_ligou === 1 ? '' : 's'} já ${r.ja_ligou === 1 ? 'foi trabalhado' : 'foram trabalhados'} por todos os SDRs marcados e ${r.ja_ligou === 1 ? 'fica' : 'ficam'} onde ${r.ja_ligou === 1 ? 'está' : 'estão'}.`);
   if (r.ja_era_dono > 0) avisos.push(`${num(r.ja_era_dono)} já ${r.ja_era_dono === 1 ? 'é' : 'são'} do SDR de destino e ${r.ja_era_dono === 1 ? 'fica' : 'ficam'} como ${r.ja_era_dono === 1 ? 'está' : 'estão'}.`);
-  box.innerHTML = `<div class="card flat"><b>${num(r.total)} contato${r.total === 1 ? '' : 's'} encontrado${r.total === 1 ? '' : 's'} · ${num(r.movidos)} ser${r.movidos === 1 ? 'á movido' : 'ão movidos'}</b>
+  const nlTxt = r.nova_lista ? `<div class="small" style="margin-top:6px">Lista nova “<b>${esc(r.nova_lista)}</b>”: <b>${num(r.lista_alterados)}</b> contato${r.lista_alterados === 1 ? '' : 's'} ${r.lista_alterados === 1 ? 'vai' : 'vão'} para ela${r.lista_ja_estavam ? ` (${num(r.lista_ja_estavam)} já ${r.lista_ja_estavam === 1 ? 'está' : 'estão'} nela)` : ''}.</div>` : '';
+  const dst = m.sel.length ? `<b>${num(r.total)} contato${r.total === 1 ? '' : 's'} encontrado${r.total === 1 ? '' : 's'} · ${num(r.movidos)} ser${r.movidos === 1 ? 'á movido' : 'ão movidos'}</b>` : `<b>${num(r.total)} contato${r.total === 1 ? '' : 's'} encontrado${r.total === 1 ? '' : 's'}</b> · o responsável não muda`;
+  box.innerHTML = `<div class="card flat">${dst}${nlTxt}
     ${r.movidos ? `<div class="small" style="margin-top:6px">${r.por_sdr.map((x) => `${esc(x.nome)}: <b>${num(x.qtd)}</b>`).join(' · ')}</div>` : ''}
     ${avisos.map((a) => `<div class="small" style="margin-top:6px;color:var(--bad)">⚠ ${a}</div>`).join('')}</div>`;
-  go.disabled = !r.movidos; go.textContent = r.movidos ? `Mover ${num(r.movidos)} contato${r.movidos === 1 ? '' : 's'}` : 'Nada para mover';
+  const fazer = (m.sel.length ? r.movidos : 0) + (r.lista_alterados || 0);
+  go.disabled = !fazer;
+  go.textContent = !fazer ? 'Nada para mover' : (r.lista_alterados && !r.movidos) ? `Mover ${num(r.lista_alterados)} para a lista “${r.nova_lista}”` : r.lista_alterados ? `Confirmar (${num(r.movidos)} movidos · ${num(r.lista_alterados)} p/ nova lista)` : `Mover ${num(r.movidos)} contato${r.movidos === 1 ? '' : 's'}`;
 }
 ACT.domover = async (t) => {
-  const m = S.mv; if (!m || !m.sel.length) return;
+  const m = S.mv; if (!m || (!m.sel.length && !(m.nl && m.lista.trim()))) return;
   t.disabled = true;
   try {
-    const r = await api('/leads/mover', { method: 'POST', body: { ...m.base, destinos: m.sel, modo: m.modo, evitar_quem_ligou: m.evitar } });
+    const r = await api('/leads/mover', { method: 'POST', body: mvBody(m, false) });
     S.sel.clear(); S.mv = null;
-    modal(`<h2>Contatos movidos</h2><div class="alert ok" style="margin-top:10px"><b>${num(r.movidos)} contato${r.movidos === 1 ? '' : 's'} movido${r.movidos === 1 ? '' : 's'}.</b></div>
-      <div class="sec-title">Resumo por SDR</div>${r.por_sdr.map((x) => `<div class="row sp small" style="padding:4px 0"><span>${esc(x.nome)}</span><b>${num(x.qtd)}</b></div>`).join('')}
+    modal(`<h2>Contatos movidos</h2>${r.nova_lista ? `<div class="alert ok" style="margin-top:10px"><b>${num(r.lista_alterados)} contato${r.lista_alterados === 1 ? '' : 's'} na lista “${esc(r.nova_lista)}”.</b></div>` : ''}${r.por_sdr.length ? `<div class="alert ok" style="margin-top:10px"><b>${num(r.movidos)} contato${r.movidos === 1 ? '' : 's'} movido${r.movidos === 1 ? '' : 's'}.</b></div>
+      <div class="sec-title">Resumo por SDR</div>` : ''}${r.por_sdr.map((x) => `<div class="row sp small" style="padding:4px 0"><span>${esc(x.nome)}</span><b>${num(x.qtd)}</b></div>`).join('')}
       ${r.ja_ligou ? `<div class="small muted" style="margin-top:8px">${num(r.ja_ligou)} não ${r.ja_ligou === 1 ? 'foi movido porque o' : 'foram movidos porque o'} SDR de destino já tinha ligado.</div>` : ''}${r.ja_era_dono ? `<div class="small muted">${num(r.ja_era_dono)} já ${r.ja_era_dono === 1 ? 'era' : 'eram'} do SDR de destino.</div>` : ''}
       <button class="btn block" style="margin-top:14px" data-act="close">Fechar</button>`);
     S.lf.offset = 0; S.stats = null; loadLeads(); drawDist();
@@ -736,6 +752,8 @@ document.addEventListener('change', (e) => {
   else if (t.name === 'mvmodo') { m.modo = t.value; m.sel = m.modo === 'um' ? m.sel.slice(0, 1) : m.sel; const d = $('#mvdest'); if (d) d.innerHTML = mvDest(); const h = d && d.previousElementSibling; if (h) h.textContent = m.modo === 'um' ? 'SDR de destino' : 'SDRs de destino (marque um ou mais)'; mvPreview(); }
   else if (t.id === 'mvone') { m.sel = t.value ? [Number(t.value)] : []; mvPreview(); }
   else if (t.id === 'mvevit') { m.evitar = t.checked; mvPreview(); }
+  else if (t.id === 'mvnl') { m.nl = t.checked; const b = $('#mvnlbox'); if (b) b.style.display = m.nl ? '' : 'none'; mvPreview(); }
+  else if (t.id === 'mvvir') { m.vir = t.checked; mvPreview(); }
 });
 
 /* ---------- importação (gestor) ---------- */
